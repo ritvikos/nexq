@@ -3,5 +3,8 @@ name = "nerfq-exp"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = ["nerfq"]
+
 [dependencies]
 mio = { version = "0.8.9", features = ["net", "os-poll"] }
