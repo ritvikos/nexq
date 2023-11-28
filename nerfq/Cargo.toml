@@ -1,0 +1,9 @@
+[package]
+name = "nerfq"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dashmap = "5.5.3"
+nanoid = "0.4.0"
+time = "0.3.30"
