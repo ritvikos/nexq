@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+crossbeam-utils = "0.8.16"
+crossbeam-queue = "0.3.8"
 dashmap = "5.5.3"
 nanoid = "0.4.0"
 time = "0.3.30"
