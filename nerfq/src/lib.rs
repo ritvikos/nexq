@@ -1,13 +1,14 @@
 extern crate dashmap;
 
 pub mod message;
-pub mod topic;
+pub mod queue;
+pub mod retention;
+pub mod stations;
 
-use dashmap::DashMap;
-use topic::Topic;
+use stations::Stations;
 
-type TopicName = String;
-
-pub struct Nerf {
-    pub topic: DashMap<TopicName, Topic>,
+#[derive(Clone)]
+pub struct NerfBroker {
+    /// Station name and metadata
+    pub stations: Stations,
 }
