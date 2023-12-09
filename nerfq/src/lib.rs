@@ -5,10 +5,10 @@ pub mod message;
 pub mod partition;
 pub mod queue;
 pub mod retention;
-pub mod stations;
+pub mod station;
 pub mod storage;
 
-use stations::Stations;
+use station::Stations;
 
 #[derive(Clone, Debug)]
 pub struct NerfBroker {
@@ -21,7 +21,7 @@ mod tests {
     use crate::{
         queue::Queue,
         retention::RetentionPolicy,
-        stations::{Station, Stations},
+        station::{Station, Stations},
         NerfBroker,
     };
     use std::{
