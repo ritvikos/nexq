@@ -1,34 +1,34 @@
 extern crate dashmap;
 
-use crate::{message::Message, queue::Queue, retention::RetentionPolicy};
+use crate::{message::Message, partition::Partitions, queue::Queue, retention::RetentionPolicy};
 use dashmap::DashMap;
 use std::{
     error::Error,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
-/// Name of the Station
+/// Name of the station
 type StationName = String;
 
 #[derive(Debug, Default)]
 pub struct Stations {
-    // Replace dashMap with a concurrent trie for efficient name-based filtering? (similar to NATS subjects, e.g., subject.sub.*).
+    // Replace dashmap with a concurrent trie for efficient name-based filtering? (similar to NATS subjects, e.g., subject.sub.*).
     /// Station name and metadata
     pub stations: DashMap<StationName, Station>,
 
     /// Total stations
-    pub count: AtomicU64,
+    pub count: AtomicUsize,
 
     /// Max number of stations
-    pub max_count: Option<u64>,
+    pub max_count: Option<AtomicUsize>,
 }
 
 impl Clone for Stations {
     fn clone(&self) -> Self {
         Self {
             stations: self.stations.clone(),
-            count: AtomicU64::new(self.count.load(Ordering::SeqCst)),
-            max_count: self.max_count,
+            count: AtomicUsize::new(self.count.load(Ordering::Acquire)),
+            max_count: None,
         }
     }
 }
@@ -38,8 +38,8 @@ impl Stations {
         Self::default()
     }
 
-    pub fn with_max_count(mut self, max_count: Option<u64>) -> Self {
-        self.max_count = max_count;
+    pub fn with_max_count(mut self, max_count: usize) -> Self {
+        self.max_count = Some(AtomicUsize::new(max_count));
         self
     }
 
@@ -63,8 +63,10 @@ impl Stations {
 
     // Returns `true` if max_count < count.
     fn within_bounds(&self) -> bool {
-        match self.max_count {
-            Some(max_count) => self.count.load(Ordering::Relaxed) < max_count,
+        match &self.max_count {
+            Some(max_count) => {
+                self.count.load(Ordering::Acquire) < max_count.load(Ordering::Acquire)
+            }
             None => true,
         }
     }
@@ -83,35 +85,46 @@ pub struct Station {
     /// Station name
     pub name: String,
 
-    /// Station constraints
-    pub constraint: StationConstraint,
-
     /// Queue containing messages
+    #[deprecated(note = "Use partitions instead")]
     pub queue: Queue,
 
-    /// Number of messages
-    pub count: AtomicU64,
+    /// Partitions
+    pub partitions: Partitions,
 
-    /// Retention Policy
+    /// Number of messages
+    pub count: AtomicUsize,
+
+    /// Retention policy
     pub retention_policy: RetentionPolicy,
+}
+
+/// Store
+#[derive(Clone, Debug)]
+pub enum Store {
+    /// In-Memory
+    Memory(Queue),
+
+    /// Persistent
+    Persistent(),
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self::Memory(Queue::default())
+    }
 }
 
 impl Clone for Station {
     fn clone(&self) -> Self {
         Self {
             name: self.name.clone(),
-            constraint: self.constraint.clone(),
             queue: self.queue.clone(),
-            count: AtomicU64::new(self.count.load(Ordering::SeqCst)),
+            count: AtomicUsize::new(self.count.load(Ordering::Acquire)),
             retention_policy: self.retention_policy.clone(),
+            partitions: self.partitions.clone(),
         }
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct StationConstraint {
-    /// Message limits
-    pub message_limit: Option<u64>,
 }
 
 impl Station {
@@ -124,13 +137,23 @@ impl Station {
         self
     }
 
+    pub fn with_retention_policy(mut self, retention_policy: RetentionPolicy) -> Self {
+        self.retention_policy = retention_policy;
+        self
+    }
+
+    pub fn with_queue(mut self, queue: Queue) -> Self {
+        self.queue = queue;
+        self
+    }
+
     pub fn build(self) -> Self {
         Self {
             name: self.name,
-            constraint: self.constraint,
             queue: self.queue,
             count: self.count,
             retention_policy: self.retention_policy,
+            partitions: self.partitions,
         }
     }
 
@@ -156,7 +179,7 @@ impl Station {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicU16;
+    use std::sync::atomic::AtomicUsize;
     use time::OffsetDateTime;
 
     #[test]
@@ -167,7 +190,7 @@ mod tests {
             .with_id("msg_001".into())
             .with_ttl(None)
             .with_payload("payload_001".into())
-            .with_attempts(AtomicU16::default())
+            .with_attempts(AtomicUsize::default())
             .with_timestamp(OffsetDateTime::now_utc())
             .build();
 

@@ -2,7 +2,7 @@ extern crate time;
 
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicU16, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use time::{Duration, OffsetDateTime};
 
@@ -15,7 +15,7 @@ pub struct Message {
     pub payload: String,
 
     /// Attempts
-    pub attempts: AtomicU16,
+    pub attempts: AtomicUsize,
 
     /// Attached metadata
     pub metadata: HashMap<String, Vec<String>>,
@@ -25,6 +25,9 @@ pub struct Message {
 
     /// Current date and time (in utc)
     pub timestamp: OffsetDateTime,
+
+    /// Acknowledgement status
+    pub ack: AtomicBool,
 }
 
 impl Clone for Message {
@@ -32,10 +35,11 @@ impl Clone for Message {
         Self {
             id: self.id.clone(),
             payload: self.payload.clone(),
-            attempts: AtomicU16::new(self.attempts.load(Ordering::SeqCst)),
+            attempts: AtomicUsize::new(self.attempts.load(Ordering::Acquire)),
             metadata: self.metadata.clone(),
             ttl: self.ttl,
             timestamp: self.timestamp,
+            ack: AtomicBool::new(self.ack.load(Ordering::Acquire)),
         }
     }
 }
@@ -44,11 +48,12 @@ impl Default for Message {
     fn default() -> Self {
         Self {
             id: String::default(),
-            attempts: AtomicU16::default(),
+            attempts: AtomicUsize::default(),
             metadata: HashMap::default(),
             payload: String::default(),
             timestamp: OffsetDateTime::now_utc(),
             ttl: None,
+            ack: AtomicBool::default(),
         }
     }
 }
@@ -63,7 +68,7 @@ impl Message {
         self
     }
 
-    pub fn with_attempts(mut self, attempts: AtomicU16) -> Self {
+    pub fn with_attempts(mut self, attempts: AtomicUsize) -> Self {
         self.attempts = attempts;
         self
     }
@@ -96,6 +101,7 @@ impl Message {
             payload: self.payload,
             timestamp: self.timestamp,
             ttl: self.ttl,
+            ack: self.ack,
         }
     }
 }
