@@ -25,7 +25,7 @@ mod tests {
         NerfBroker,
     };
     use std::{
-        sync::{atomic::Ordering, Arc, Mutex},
+        sync::{Arc, Mutex},
         thread,
     };
 
@@ -77,7 +77,7 @@ mod tests {
         });
 
         let expected = ITERATIONS_PER_THREAD;
-        assert_eq!(expected, broker.stations.count.load(Ordering::Relaxed));
+        assert_eq!(expected, broker.stations.count());
     }
 
     #[test]
@@ -108,7 +108,7 @@ mod tests {
         }
 
         let expected = 0;
-        assert_eq!(expected, broker.stations.count.load(Ordering::Relaxed));
+        assert_eq!(expected, broker.stations.count());
     }
 
     #[test]
@@ -138,14 +138,6 @@ mod tests {
         }
 
         let expected = 10000;
-        assert_eq!(
-            expected,
-            broker_arc
-                .lock()
-                .unwrap()
-                .stations
-                .count
-                .load(Ordering::Acquire)
-        );
+        assert_eq!(expected, broker_arc.lock().unwrap().stations.count());
     }
 }
