@@ -11,7 +11,7 @@ pub struct Partitions {
     /// Partitions
     pub partitions: Vec<Partition>,
 
-    /// Limit number of partitions
+    /// Max number of partitions
     pub max_count: Option<usize>,
 }
 

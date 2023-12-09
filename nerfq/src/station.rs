@@ -2,10 +2,7 @@ extern crate dashmap;
 
 use crate::{message::Message, partition::Partitions, queue::Queue, retention::RetentionPolicy};
 use dashmap::DashMap;
-use std::{
-    error::Error,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::error::Error;
 
 /// Name of the station
 type StationName = String;
@@ -16,18 +13,14 @@ pub struct Stations {
     /// Station name and metadata
     pub stations: DashMap<StationName, Station>,
 
-    /// Total stations
-    pub count: AtomicUsize,
-
     /// Max number of stations
-    pub max_count: Option<AtomicUsize>,
+    pub max_count: Option<usize>,
 }
 
 impl Clone for Stations {
     fn clone(&self) -> Self {
         Self {
             stations: self.stations.clone(),
-            count: AtomicUsize::new(self.count.load(Ordering::Acquire)),
             max_count: None,
         }
     }
@@ -39,8 +32,12 @@ impl Stations {
     }
 
     pub fn with_max_count(mut self, max_count: usize) -> Self {
-        self.max_count = Some(AtomicUsize::new(max_count));
+        self.max_count = Some(max_count);
         self
+    }
+
+    pub fn count(&self) -> usize {
+        self.stations.len()
     }
 
     pub fn insert(&self, station: Station) -> Result<(), Box<dyn Error>> {
@@ -52,8 +49,6 @@ impl Stations {
             return Err("Station already exists".into());
         }
 
-        self.count.fetch_add(1, Ordering::AcqRel);
-
         Ok(())
     }
 
@@ -64,9 +59,7 @@ impl Stations {
     // Returns `true` if max_count < count.
     fn within_bounds(&self) -> bool {
         match &self.max_count {
-            Some(max_count) => {
-                self.count.load(Ordering::Acquire) < max_count.load(Ordering::Acquire)
-            }
+            Some(max_count) => self.count() < *max_count,
             None => true,
         }
     }
@@ -92,9 +85,6 @@ pub struct Station {
     /// Partitions
     pub partitions: Partitions,
 
-    /// Number of messages
-    pub count: AtomicUsize,
-
     /// Retention policy
     pub retention_policy: RetentionPolicy,
 }
@@ -104,7 +94,6 @@ impl Clone for Station {
         Self {
             name: self.name.clone(),
             queue: self.queue.clone(),
-            count: AtomicUsize::new(self.count.load(Ordering::Acquire)),
             retention_policy: self.retention_policy.clone(),
             partitions: self.partitions.clone(),
         }
@@ -135,7 +124,6 @@ impl Station {
         Self {
             name: self.name,
             queue: self.queue,
-            count: self.count,
             retention_policy: self.retention_policy,
             partitions: self.partitions,
         }
@@ -144,17 +132,13 @@ impl Station {
     /// Enqueues message into the queue
     pub fn enqueue(&mut self, message: Message) -> Result<(), Box<Message>> {
         self.queue.push(message)?;
-        self.count.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
     /// Dequeues message from the queue
     pub fn dequeue(&mut self) -> Result<Message, Box<dyn Error>> {
         match self.queue.pop() {
-            Some(message) => {
-                self.count.fetch_sub(1, Ordering::AcqRel);
-                Ok(message)
-            }
+            Some(message) => Ok(message),
             None => Err("Cannot Dequeue".into()),
         }
     }
