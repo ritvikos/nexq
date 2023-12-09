@@ -1,10 +1,12 @@
 extern crate dashmap;
 
+pub mod error;
 pub mod message;
 pub mod partition;
 pub mod queue;
 pub mod retention;
 pub mod stations;
+pub mod storage;
 
 use stations::Stations;
 
