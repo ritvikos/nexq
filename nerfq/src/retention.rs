@@ -7,14 +7,25 @@ pub struct RetentionPolicy {
 }
 
 /// Storage policy
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub enum StoragePolicy {
     /// In-Memory
-    #[default]
-    Memory,
+    Memory(StorageConstraint),
 
     /// Persistent
-    Persistent,
+    Persistent(StorageConstraint),
+}
+
+impl Default for StoragePolicy {
+    fn default() -> Self {
+        Self::Memory(StorageConstraint::default())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StorageConstraint {
+    pub count_limit: Option<usize>,
+    pub size_limit: Option<usize>,
 }
 
 /// Interest Policy
@@ -28,14 +39,20 @@ pub enum InterestPolicy {
 
 #[derive(Clone, Debug, Default)]
 pub enum DiscardPolicy {
-    /// Discards old messages in the Station
+    /// Discards old messages in the station.
     /// if it exceeds predefined limits.
     #[default]
     Old,
 
-    /// Restricts adding new messages in the Station
+    /// Restricts adding new messages in the station,
     /// if it exceeds predefined limits.
     New,
+
+    // In case of unbounded queue,
+    // there're no predefined limits,
+    // unless OOM [in-memory] / storage [persistence].
+    /// No predefined limits on adding messages in the station.
+    None,
 }
 
 impl RetentionPolicy {
