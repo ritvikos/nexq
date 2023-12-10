@@ -54,7 +54,9 @@ impl Partitions {
             return 0;
         }
 
-        let next_idx = self.idx.fetch_add(1, Ordering::Acquire) + 1;
+        self.idx.fetch_add(1, Ordering::AcqRel);
+        let next_idx = self.idx.load(Ordering::Acquire);
+
         (next_idx) % self.count()
     }
 
