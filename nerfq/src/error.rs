@@ -25,7 +25,7 @@ impl fmt::Display for Error {
 }
 
 /// Defines the error type.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Kind {
     /// Occurs when unable to create stations.
     Station(StationError),
@@ -34,7 +34,7 @@ pub enum Kind {
     Partition(PartitionError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum StationError {
     /// Occurs when the maximum stations limit is reached,
     /// preventing further creation.
@@ -61,7 +61,7 @@ impl fmt::Display for StationError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PartitionError {
     /// Occurs when the maximum partition limit is reached,
     /// preventing further creation.
@@ -82,16 +82,43 @@ impl fmt::Display for PartitionError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, Kind, PartitionError};
+    use super::{Error, Kind, PartitionError, StationError};
 
-    fn create_partition() -> Result<(), Error> {
+    // -----
+    // Station errors
+    // -----
+
+    fn station_already_exists() -> Result<(), Error> {
+        Err(Error::new(Kind::Station(StationError::AlreadyExists)))
+    }
+
+    fn station_max_count() -> Result<(), Error> {
+        Err(Error::new(Kind::Station(StationError::MaxCount)))
+    }
+
+    #[test]
+    fn test_station_errors() {
+        if let Err(err) = station_already_exists() {
+            assert_eq!(Kind::Station(StationError::AlreadyExists), err.kind);
+        }
+
+        if let Err(err) = station_max_count() {
+            assert_eq!(Kind::Station(StationError::MaxCount), err.kind);
+        }
+    }
+
+    // -----
+    // Partition errors
+    // -----
+
+    fn partition_max_count() -> Result<(), Error> {
         Err(Error::new(Kind::Partition(PartitionError::MaxCount)))
     }
 
     #[test]
-    fn test_custom_error() {
-        if let Err(err) = create_partition() {
-            eprintln!("Error creating partition: {}", err);
+    fn test_partition_errors() {
+        if let Err(err) = partition_max_count() {
+            assert_eq!(Kind::Partition(PartitionError::MaxCount), err.kind)
         }
     }
 }
