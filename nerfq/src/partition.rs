@@ -58,7 +58,7 @@ impl Partitions {
         (next_idx) % self.count()
     }
 
-    /// Get total number of partitions.    
+    /// Get total number of partitions.
     pub fn count(&self) -> usize {
         self.partitions.len()
     }
@@ -74,19 +74,16 @@ impl Partitions {
 
     /// Insert partition.
     fn try_insert(&mut self, partition: Partition) -> Result<(), Error> {
-        match self.max_count {
-            Some(max_count) => {
-                if self.partitions.len().lt(&max_count) {
-                    self.partitions.push(partition);
-                    Ok(())
-                } else {
-                    Err(Error::new(Kind::Partition(PartitionError::MaxCount)))
-                }
-            }
-            None => {
+        if let Some(max_count) = self.max_count {
+            if self.partitions.len() < max_count {
                 self.partitions.push(partition);
                 Ok(())
+            } else {
+                Err(Error::new(Kind::Partition(PartitionError::MaxCount)))
             }
+        } else {
+            self.partitions.push(partition);
+            Ok(())
         }
     }
 }
