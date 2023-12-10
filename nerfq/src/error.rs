@@ -19,6 +19,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.kind {
             Kind::Partition(reason) => write!(f, "{}", reason),
+            Kind::Station(reason) => write!(f, "{}", reason),
         }
     }
 }
@@ -26,8 +27,38 @@ impl fmt::Display for Error {
 /// Defines the error type.
 #[derive(Debug)]
 pub enum Kind {
+    /// Occurs when unable to create stations.
+    Station(StationError),
+
     /// Occurs when unable to create partitions.
     Partition(PartitionError),
+}
+
+#[derive(Debug)]
+pub enum StationError {
+    /// Occurs when the maximum stations limit is reached,
+    /// preventing further creation.
+    MaxCount,
+
+    /// Occurs when the station already exists with same name,
+    /// preventing further creation.
+    AlreadyExists,
+}
+
+impl StdError for StationError {}
+
+impl fmt::Display for StationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StationError::MaxCount => {
+                write!(f, "Max station count limit reached.")
+            }
+
+            StationError::AlreadyExists => {
+                write!(f, "Station already exists.")
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

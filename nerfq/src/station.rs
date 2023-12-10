@@ -1,8 +1,13 @@
 extern crate dashmap;
 
-use crate::{message::Message, partition::Partitions, queue::Queue, retention::RetentionPolicy};
+use crate::{
+    error::{Error, Kind, StationError},
+    message::Message,
+    partition::Partitions,
+    queue::Queue,
+    retention::RetentionPolicy,
+};
 use dashmap::DashMap;
-use std::error::Error;
 
 /// Name of the station
 type StationName = String;
@@ -40,13 +45,13 @@ impl Stations {
         self.stations.len()
     }
 
-    pub fn insert(&self, station: Station) -> Result<(), Box<dyn Error>> {
+    pub fn insert(&self, station: Station) -> Result<(), Error> {
         let name = station.name.clone();
 
         self.bounded()?;
 
         if self.stations.insert(name, station).is_some() {
-            return Err("Station already exists".into());
+            return Err(Error::new(Kind::Station(StationError::AlreadyExists)));
         }
 
         Ok(())
@@ -65,10 +70,10 @@ impl Stations {
     }
 
     // Validates message bounds for insertion.
-    fn bounded(&self) -> Result<(), Box<dyn Error>> {
+    fn bounded(&self) -> Result<(), Error> {
         match self.within_bounds() {
             true => Ok(()),
-            false => Err("Station is full!".into()),
+            false => Err(Error::new(Kind::Station(StationError::MaxCount))),
         }
     }
 }
@@ -136,7 +141,7 @@ impl Station {
     }
 
     /// Dequeues message from the queue
-    pub fn dequeue(&mut self) -> Result<Message, Box<dyn Error>> {
+    pub fn dequeue(&mut self) -> Result<Message, Box<dyn std::error::Error>> {
         match self.queue.pop() {
             Some(message) => Ok(message),
             None => Err("Cannot Dequeue".into()),
