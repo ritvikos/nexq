@@ -4,6 +4,7 @@ use crate::{
     error::{Error, Kind, PartitionError},
     storage::Storage,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use ulid::Ulid;
 
 #[derive(Debug, Default)]
@@ -13,6 +14,9 @@ pub struct Partitions {
 
     /// Max number of partitions
     pub max_count: Option<usize>,
+
+    /// Current index
+    idx: AtomicUsize,
 }
 
 impl Clone for Partitions {
@@ -20,6 +24,7 @@ impl Clone for Partitions {
         Self {
             partitions: self.partitions.clone(),
             max_count: self.max_count,
+            idx: AtomicUsize::new(self.idx.load(Ordering::Acquire)),
         }
     }
 }
@@ -40,6 +45,22 @@ impl Partitions {
     pub fn with_max_count(mut self, max_count: usize) -> Self {
         self.max_count = Some(max_count);
         self
+    }
+
+    /// Implements round robin partitioning.
+    /// Cycle through the partitions.
+    pub fn rotate(&mut self) -> usize {
+        if self.partitions.is_empty() {
+            return 0;
+        }
+
+        let next_idx = self.idx.fetch_add(1, Ordering::Acquire) + 1;
+        (next_idx) % self.count()
+    }
+
+    /// Get total number of partitions.    
+    pub fn count(&self) -> usize {
+        self.partitions.len()
     }
 
     /// Inserts a partition with custom configuration,
@@ -105,7 +126,7 @@ mod tests {
         let mut partitions = Partitions::new();
         assert!(
             partitions.insert(Some(partition)).is_ok(),
-            "Inserting partition without any limits"
+            "Inserting partition without any limits."
         )
     }
 
@@ -117,12 +138,30 @@ mod tests {
 
         let mut partitions = Partitions::new().with_max_count(2);
 
-        partitions.insert(Some(partition_one)).unwrap();
-        partitions.insert(Some(partition_two)).unwrap();
-
+        assert!(partitions.insert(Some(partition_one)).is_ok());
+        assert!(partitions.insert(Some(partition_two)).is_ok());
         assert!(
             partitions.insert(Some(partition_three)).is_err(),
             "If partition count exceeds the maximum limit, it results in error."
         )
+    }
+
+    #[test]
+    fn test_partitions_round_robin_routing() {
+        let mut partitions = Partitions::new();
+
+        (1..5).for_each(|_| {
+            let partition = Partition::new();
+            partitions.insert(Some(partition)).unwrap();
+        });
+
+        assert_eq!(1, partitions.rotate());
+        assert_eq!(2, partitions.rotate());
+        assert_eq!(3, partitions.rotate());
+        assert_eq!(0, partitions.rotate());
+        assert_eq!(1, partitions.rotate());
+        assert_eq!(2, partitions.rotate());
+        assert_eq!(3, partitions.rotate());
+        assert_eq!(0, partitions.rotate());
     }
 }
