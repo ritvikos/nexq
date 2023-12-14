@@ -14,7 +14,6 @@ type StationName = String;
 
 #[derive(Debug, Default)]
 pub struct Stations {
-    // Replace dashmap with a concurrent trie for efficient name-based filtering? (similar to NATS subjects, e.g., subject.sub.*).
     /// Station name and metadata
     pub stations: DashMap<StationName, Station>,
 
