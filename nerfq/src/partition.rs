@@ -30,34 +30,21 @@ impl Clone for Partitions {
 }
 
 impl Partitions {
-    /// Creates a new instance.
+    /// Create a new instance.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Sets pre-defined partitions.
+    /// Set pre-defined partitions.
     pub fn with_partitions(mut self, partitions: Vec<Partition>) -> Self {
         self.partitions = partitions;
         self
     }
 
-    /// Sets max count limit.
+    /// Set max count limit.
     pub fn with_max_count(mut self, max_count: usize) -> Self {
         self.max_count = Some(max_count);
         self
-    }
-
-    /// Implements round robin partitioning.
-    /// Cycle through the partitions.
-    pub fn rotate(&mut self) -> usize {
-        if self.partitions.is_empty() {
-            return 0;
-        }
-
-        self.idx.fetch_add(1, Ordering::AcqRel);
-        let next_idx = self.idx.load(Ordering::Acquire);
-
-        (next_idx) % self.count()
     }
 
     /// Get total number of partitions.
@@ -65,7 +52,35 @@ impl Partitions {
         self.partitions.len()
     }
 
-    /// Inserts a partition with custom configuration,
+    /// Get next partition based on specified partitioning strategy.
+    pub fn get_next_by(&mut self, strategy: PartitionStrategy) -> Partition {
+        match strategy {
+            PartitionStrategy::RoundRobin => self.round_robin_next(),
+        }
+    }
+
+    /// Get next partition based on round robin partitioning.
+    pub fn round_robin_next(&self) -> Partition {
+        let idx = self.round_robin_rotate();
+
+        // index is always within bounds.
+        self.partitions[idx].clone()
+    }
+
+    /// Implement round robin partitioning.
+    /// Cycle through the partitions.
+    pub fn round_robin_rotate(&self) -> usize {
+        if self.partitions.is_empty() {
+            return 0;
+        }
+
+        self.idx.fetch_add(1, Ordering::AcqRel);
+        let next_idx = self.idx.load(Ordering::Acquire);
+
+        next_idx % self.count()
+    }
+
+    /// Insert a partition with custom configuration,
     /// defaulting to standard if unspecified.
     pub fn insert(&mut self, partition: Option<Partition>) -> Result<(), Error> {
         match partition {
@@ -88,6 +103,10 @@ impl Partitions {
             Ok(())
         }
     }
+
+    // TODO:
+    // Use another data structure.
+    // Support efficient deletion.
 }
 
 #[derive(Clone, Debug, Default)]
@@ -113,6 +132,14 @@ impl Partition {
         self.storage = storage;
         self
     }
+}
+
+/// Partitioning strategy
+#[derive(Debug, Default)]
+pub enum PartitionStrategy {
+    /// Allocating partitions in a circular order.
+    #[default]
+    RoundRobin,
 }
 
 #[cfg(test)]
@@ -154,13 +181,69 @@ mod tests {
             partitions.insert(Some(partition)).unwrap();
         });
 
-        assert_eq!(1, partitions.rotate());
-        assert_eq!(2, partitions.rotate());
-        assert_eq!(3, partitions.rotate());
-        assert_eq!(0, partitions.rotate());
-        assert_eq!(1, partitions.rotate());
-        assert_eq!(2, partitions.rotate());
-        assert_eq!(3, partitions.rotate());
-        assert_eq!(0, partitions.rotate());
+        assert_eq!(1, partitions.round_robin_rotate());
+        assert_eq!(2, partitions.round_robin_rotate());
+        assert_eq!(3, partitions.round_robin_rotate());
+        assert_eq!(0, partitions.round_robin_rotate());
     }
+
+    #[test]
+    fn test_partitions_get_next() {
+        let mut partitions = Partitions::new();
+
+        let mut ids = Vec::new();
+
+        (1..5).for_each(|_| {
+            let partition = Partition::new();
+            ids.push(partition.id);
+            partitions.insert(Some(partition)).unwrap();
+        });
+
+        assert_eq!(ids[1], partitions.round_robin_next().id);
+        assert_eq!(ids[2], partitions.round_robin_next().id);
+        assert_eq!(ids[3], partitions.round_robin_next().id);
+        assert_eq!(ids[0], partitions.round_robin_next().id);
+
+        // More rigorous testing to ensure multiple iterations
+        // doesn't overflow bounds with current round robin
+        // implementation.
+
+        // let ulids = [ids[1], ids[2], ids[3], ids[0]];
+        // (1..101).for_each(|_| {
+        //     ulids.iter().for_each(|i| {
+        //         assert_eq!(i, &partitions.get_next().id);
+        //     });
+        // });
+    }
+
+    // #[test]
+    // fn test_partitions_get_next_by_round_robin() {
+    //     use crate::partition::PartitionStrategy;
+    //     let mut partitions = Partitions::new();
+
+    //     let mut ids = Vec::new();
+
+    //     (1..5).for_each(|_| {
+    //         let partition = Partition::new();
+    //         ids.push(partition.id);
+    //         partitions.insert(Some(partition)).unwrap();
+    //     });
+
+    //     assert_eq!(
+    //         ids[1],
+    //         partitions.get_next_by(PartitionStrategy::RoundRobin).id
+    //     );
+    //     assert_eq!(
+    //         ids[2],
+    //         partitions.get_next_by(PartitionStrategy::RoundRobin).id
+    //     );
+    //     assert_eq!(
+    //         ids[3],
+    //         partitions.get_next_by(PartitionStrategy::RoundRobin).id
+    //     );
+    //     assert_eq!(
+    //         ids[0],
+    //         partitions.get_next_by(PartitionStrategy::RoundRobin).id
+    //     );
+    // }
 }
