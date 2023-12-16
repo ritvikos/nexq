@@ -65,16 +65,7 @@ impl Partitions {
     }
 
     /// Insert a partition with custom configuration,
-    /// defaulting to standard if unspecified.
-    pub fn insert(&mut self, partition: Option<Partition>) -> Result<(), Error> {
-        match partition {
-            Some(partition) => self.try_insert(partition),
-            None => self.try_insert(Partition::default()),
-        }
-    }
-
-    /// Insert partition.
-    fn try_insert(&mut self, partition: Partition) -> Result<(), Error> {
+    fn insert(&mut self, partition: Partition) -> Result<(), Error> {
         if let Some(max_count) = self.max_count {
             if self.partitions.len() < max_count {
                 self.partitions.push(partition);
@@ -143,7 +134,7 @@ mod tests {
         // Insert 100 items in the partitions.
         (1..=count).for_each(|_| {
             assert!(
-                partitions.insert(Some(Partition::new())).is_ok(),
+                partitions.insert(Partition::new()).is_ok(),
                 "Inserting partition without any limits."
             )
         });
@@ -162,10 +153,10 @@ mod tests {
         // Means, it cannot hold more than 2 partition.
         let mut partitions = Partitions::new().with_max_count(2);
 
-        assert!(partitions.insert(Some(one)).is_ok());
-        assert!(partitions.insert(Some(two)).is_ok());
+        assert!(partitions.insert(one).is_ok());
+        assert!(partitions.insert(two).is_ok());
         assert!(
-            partitions.insert(Some(three)).is_err(),
+            partitions.insert(three).is_err(),
             "If partition count exceeds the maximum limit, it results in error."
         )
     }
@@ -183,7 +174,7 @@ mod tests {
         // Insert 4 partition.
         (1..=4).for_each(|_| {
             let partition = Partition::new();
-            partitions.insert(Some(partition)).unwrap();
+            partitions.insert(partition).unwrap();
         });
 
         // Check the overflow scenario.
@@ -197,7 +188,7 @@ mod tests {
         // Insert 5 more partition.
         (1..=5).for_each(|_| {
             let partition = Partition::new();
-            partitions.insert(Some(partition)).unwrap();
+            partitions.insert(partition).unwrap();
         });
 
         // Newly inserted partitions are taken into consideration.
