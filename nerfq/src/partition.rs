@@ -3,8 +3,8 @@ extern crate ulid;
 use crate::{
     error::{Error, Kind, PartitionError},
     storage::Storage,
+    strategy::Strategy,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
 use ulid::Ulid;
 
 #[derive(Debug, Default)]
@@ -15,8 +15,8 @@ pub struct Partitions {
     /// Max number of partitions
     pub max_count: Option<usize>,
 
-    /// Current index
-    idx: AtomicUsize,
+    /// Partitioning Strategy
+    strategy: Strategy,
 }
 
 impl Clone for Partitions {
@@ -24,7 +24,7 @@ impl Clone for Partitions {
         Self {
             partitions: self.partitions.clone(),
             max_count: self.max_count,
-            idx: AtomicUsize::new(self.idx.load(Ordering::Acquire)),
+            strategy: self.strategy.clone(),
         }
     }
 }
@@ -47,37 +47,21 @@ impl Partitions {
         self
     }
 
+    /// Set partitioning strategy.
+    pub fn with_strategy(mut self, strategy: Strategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
     /// Get total number of partitions.
+    #[inline(always)]
     pub fn count(&self) -> usize {
         self.partitions.len()
     }
 
-    /// Get next partition based on specified partitioning strategy.
-    pub fn get_next_by(&mut self, strategy: PartitionStrategy) -> Partition {
-        match strategy {
-            PartitionStrategy::RoundRobin => self.round_robin_next(),
-        }
-    }
-
-    /// Get next partition based on round robin partitioning.
-    pub fn round_robin_next(&self) -> Partition {
-        let idx = self.round_robin_rotate();
-
-        // index is always within bounds.
-        self.partitions[idx].clone()
-    }
-
-    /// Implement round robin partitioning.
-    /// Cycle through the partitions.
-    pub fn round_robin_rotate(&self) -> usize {
-        if self.partitions.is_empty() {
-            return 0;
-        }
-
-        self.idx.fetch_add(1, Ordering::AcqRel);
-        let next_idx = self.idx.load(Ordering::Acquire);
-
-        next_idx % self.count()
+    /// Get index based on the strategy.
+    pub fn rotate(&self) -> usize {
+        self.strategy.rotate(&self.count())
     }
 
     /// Insert a partition with custom configuration,
@@ -145,105 +129,85 @@ pub enum PartitionStrategy {
 #[cfg(test)]
 mod tests {
     use super::{Partition, Partitions};
+    use crate::strategy::Strategy;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
-    fn test_partitions_insert_pass() {
-        let partition = Partition::new();
+    fn test_partitions_insertion_passed() {
+        // Total partition to insert.
+        let count = 100;
+
+        // Create partitions.
         let mut partitions = Partitions::new();
-        assert!(
-            partitions.insert(Some(partition)).is_ok(),
-            "Inserting partition without any limits."
-        )
+
+        // Insert 100 items in the partitions.
+        (1..=count).for_each(|_| {
+            assert!(
+                partitions.insert(Some(Partition::new())).is_ok(),
+                "Inserting partition without any limits."
+            )
+        });
+
+        assert_eq!(count, partitions.count())
     }
 
     #[test]
-    fn test_partitions_insert_fail() {
-        let partition_one = Partition::new();
-        let partition_two = Partition::new();
-        let partition_three = Partition::new();
+    fn test_partitions_insertion_failed() {
+        // Create 3 partition.
+        let one = Partition::new();
+        let two = Partition::new();
+        let three = Partition::new();
 
+        // Create partitions with maximum count condition.
+        // Means, it cannot hold more than 2 partition.
         let mut partitions = Partitions::new().with_max_count(2);
 
-        assert!(partitions.insert(Some(partition_one)).is_ok());
-        assert!(partitions.insert(Some(partition_two)).is_ok());
+        assert!(partitions.insert(Some(one)).is_ok());
+        assert!(partitions.insert(Some(two)).is_ok());
         assert!(
-            partitions.insert(Some(partition_three)).is_err(),
+            partitions.insert(Some(three)).is_err(),
             "If partition count exceeds the maximum limit, it results in error."
         )
     }
 
     #[test]
-    fn test_partitions_round_robin_routing() {
-        let mut partitions = Partitions::new();
+    fn test_partitions_with_round_robin_strategy() {
+        // Define round robin strategy.
+        let round_robin = Strategy::RoundRobin {
+            idx: AtomicUsize::new(usize::MAX),
+        };
 
-        (1..5).for_each(|_| {
+        // Create partitions.
+        let mut partitions = Partitions::new().with_strategy(round_robin);
+
+        // Insert 4 partition.
+        (1..=4).for_each(|_| {
             let partition = Partition::new();
             partitions.insert(Some(partition)).unwrap();
         });
 
-        assert_eq!(1, partitions.round_robin_rotate());
-        assert_eq!(2, partitions.round_robin_rotate());
-        assert_eq!(3, partitions.round_robin_rotate());
-        assert_eq!(0, partitions.round_robin_rotate());
-    }
+        // Check the overflow scenario.
+        assert_eq!(3, partitions.rotate()); // chooses 4th partition (3rd index)
 
-    #[test]
-    fn test_partitions_get_next() {
-        let mut partitions = Partitions::new();
+        // Iterate the newly inserted partitions.
+        [0, 1, 2, 3].iter().for_each(|result| {
+            assert_eq!(result, &partitions.rotate());
+        });
 
-        let mut ids = Vec::new();
-
-        (1..5).for_each(|_| {
+        // Insert 5 more partition.
+        (1..=5).for_each(|_| {
             let partition = Partition::new();
-            ids.push(partition.id);
             partitions.insert(Some(partition)).unwrap();
         });
 
-        assert_eq!(ids[1], partitions.round_robin_next().id);
-        assert_eq!(ids[2], partitions.round_robin_next().id);
-        assert_eq!(ids[3], partitions.round_robin_next().id);
-        assert_eq!(ids[0], partitions.round_robin_next().id);
+        // Newly inserted partitions are taken into consideration.
+        [4, 5, 6, 7, 8].iter().for_each(|result| {
+            assert_eq!(result, &partitions.rotate());
+        });
 
-        // More rigorous testing to ensure multiple iterations
-        // doesn't overflow bounds with current round robin
-        // implementation.
-
-        // let ulids = [ids[1], ids[2], ids[3], ids[0]];
-        // (1..101).for_each(|_| {
-        //     ulids.iter().for_each(|i| {
-        //         assert_eq!(i, &partitions.get_next().id);
-        //     });
-        // });
+        // Final iterations.
+        (1..=5).for_each(|_| {
+            (0..=8).for_each(|result| assert_eq!(result, partitions.rotate()));
+        })
     }
-
-    // #[test]
-    // fn test_partitions_get_next_by_round_robin() {
-    //     use crate::partition::PartitionStrategy;
-    //     let mut partitions = Partitions::new();
-
-    //     let mut ids = Vec::new();
-
-    //     (1..5).for_each(|_| {
-    //         let partition = Partition::new();
-    //         ids.push(partition.id);
-    //         partitions.insert(Some(partition)).unwrap();
-    //     });
-
-    //     assert_eq!(
-    //         ids[1],
-    //         partitions.get_next_by(PartitionStrategy::RoundRobin).id
-    //     );
-    //     assert_eq!(
-    //         ids[2],
-    //         partitions.get_next_by(PartitionStrategy::RoundRobin).id
-    //     );
-    //     assert_eq!(
-    //         ids[3],
-    //         partitions.get_next_by(PartitionStrategy::RoundRobin).id
-    //     );
-    //     assert_eq!(
-    //         ids[0],
-    //         partitions.get_next_by(PartitionStrategy::RoundRobin).id
-    //     );
-    // }
 }
