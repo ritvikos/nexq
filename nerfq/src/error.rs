@@ -73,7 +73,7 @@ impl StdError for PartitionError {}
 impl fmt::Display for PartitionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PartitionError::MaxCount => {
+            Self::MaxCount => {
                 write!(f, "Max partition count limit reached.")
             }
         }
