@@ -71,14 +71,14 @@ impl Partitions {
         self.strategy.rotate(&self.count())
     }
 
-    // TODO: Reduce code duplication for insertion functions.
-
-    /// Insert a partition with custom configuration.
-    pub fn insert(&mut self, partition: Partition) -> Result<(), Error> {
+    fn try_insert<F>(&mut self, mut f: F, partition: Partition) -> Result<(), Error>
+    where
+        F: FnMut(Partition, &mut Self),
+    {
         if let Some(ref max_count) = self.max_count {
             match self.count().cmp(max_count) {
                 Ordering::Less => {
-                    self.insert_inner(partition);
+                    f(partition, self);
                     Ok(())
                 }
                 Ordering::Equal | Ordering::Greater => {
@@ -86,9 +86,25 @@ impl Partitions {
                 }
             }
         } else {
-            self.insert_inner(partition);
+            f(partition, self);
             Ok(())
         }
+    }
+
+    /// Insert a partition with custom configuration.
+    pub fn insert(&mut self, partition: Partition) -> Result<(), Error> {
+        let f = |partition: Partition, partitions: &mut Self| partitions.insert_inner(partition);
+        self.try_insert(f, partition)
+    }
+
+    /// Insert a partition at specified index with custom configuration. \
+    /// Ensure that partitions aren't empty.
+    pub fn insert_at(&mut self, partition: Partition, idx: usize) -> Result<(), Error> {
+        let f = |partition: Partition, partitions: &mut Self| {
+            partitions.insert_at_inner(partition, idx)
+        };
+
+        self.try_insert(f, partition)
     }
 
     /// Insert a partition.
@@ -99,25 +115,6 @@ impl Partitions {
     // TODO:
     // Create a high-level interface to ensure
     // there's atleast single pre-configured partition.
-
-    /// Insert a partition at specified index with custom configuration. \
-    /// Ensure that partitions aren't empty.
-    pub fn insert_at(&mut self, partition: Partition, idx: usize) -> Result<(), Error> {
-        if let Some(ref max_count) = self.max_count {
-            match self.count().cmp(max_count) {
-                Ordering::Less => {
-                    self.insert_at_inner(partition, idx);
-                    Ok(())
-                }
-                Ordering::Equal | Ordering::Greater => {
-                    Err(Error::new(Kind::Partition(PartitionError::MaxCount)))
-                }
-            }
-        } else {
-            self.insert_at_inner(partition, idx);
-            Ok(())
-        }
-    }
 
     /// Insert a partition at specified index.
     fn insert_at_inner(&mut self, partition: Partition, idx: usize) {
