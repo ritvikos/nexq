@@ -5,6 +5,7 @@ use crate::{
     storage::Storage,
     strategy::Strategy,
 };
+use std::cmp::Ordering;
 use ulid::Ulid;
 
 #[derive(Debug, Default)]
@@ -59,29 +60,69 @@ impl Partitions {
         self.partitions.len()
     }
 
+    /// Returns `true` if there're no partitions,
+    /// `false` otherwise.
+    pub fn is_empty(&self) -> bool {
+        self.partitions.is_empty()
+    }
+
     /// Get index based on the strategy.
     pub fn rotate(&self) -> usize {
         self.strategy.rotate(&self.count())
     }
 
-    /// Insert a partition with custom configuration,
-    fn insert(&mut self, partition: Partition) -> Result<(), Error> {
-        if let Some(max_count) = self.max_count {
-            if self.partitions.len() < max_count {
-                self.partitions.push(partition);
-                Ok(())
-            } else {
-                Err(Error::new(Kind::Partition(PartitionError::MaxCount)))
+    // TODO: Reduce code duplication for insertion functions.
+
+    /// Insert a partition with custom configuration.
+    pub fn insert(&mut self, partition: Partition) -> Result<(), Error> {
+        if let Some(ref max_count) = self.max_count {
+            match self.count().cmp(max_count) {
+                Ordering::Less => {
+                    self.insert_inner(partition);
+                    Ok(())
+                }
+                Ordering::Equal | Ordering::Greater => {
+                    Err(Error::new(Kind::Partition(PartitionError::MaxCount)))
+                }
             }
         } else {
-            self.partitions.push(partition);
+            self.insert_inner(partition);
             Ok(())
         }
     }
 
+    /// Insert a partition.
+    fn insert_inner(&mut self, partition: Partition) {
+        self.partitions.push(partition);
+    }
+
     // TODO:
-    // Use another data structure.
-    // Support efficient deletion.
+    // Create a high-level interface to ensure
+    // there's atleast single pre-configured partition.
+
+    /// Insert a partition at specified index with custom configuration. \
+    /// Ensure that partitions aren't empty.
+    pub fn insert_at(&mut self, partition: Partition, idx: usize) -> Result<(), Error> {
+        if let Some(ref max_count) = self.max_count {
+            match self.count().cmp(max_count) {
+                Ordering::Less => {
+                    self.insert_at_inner(partition, idx);
+                    Ok(())
+                }
+                Ordering::Equal | Ordering::Greater => {
+                    Err(Error::new(Kind::Partition(PartitionError::MaxCount)))
+                }
+            }
+        } else {
+            self.insert_at_inner(partition, idx);
+            Ok(())
+        }
+    }
+
+    /// Insert a partition at specified index.
+    fn insert_at_inner(&mut self, partition: Partition, idx: usize) {
+        self.partitions.insert(idx, partition)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -109,38 +150,11 @@ impl Partition {
     }
 }
 
-/// Partitioning strategy
-#[derive(Debug, Default)]
-pub enum PartitionStrategy {
-    /// Allocating partitions in a circular order.
-    #[default]
-    RoundRobin,
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Partition, Partitions};
     use crate::strategy::Strategy;
     use std::sync::atomic::AtomicUsize;
-
-    #[test]
-    fn test_partitions_insertion_passed() {
-        // Total partition to insert.
-        let count = 100;
-
-        // Create partitions.
-        let mut partitions = Partitions::new();
-
-        // Insert 100 items in the partitions.
-        (1..=count).for_each(|_| {
-            assert!(
-                partitions.insert(Partition::new()).is_ok(),
-                "Inserting partition without any limits."
-            )
-        });
-
-        assert_eq!(count, partitions.count())
-    }
 
     #[test]
     fn test_partitions_insertion_failed() {
