@@ -9,3 +9,4 @@ crossbeam-queue = "0.3.8"
 dashmap = "5.5.3"
 time = "0.3.30"
 ulid = { version = "1.1.0" }
+nanorand = "0.7.0"

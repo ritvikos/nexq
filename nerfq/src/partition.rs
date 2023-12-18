@@ -5,8 +5,12 @@ use crate::{
     storage::Storage,
     strategy::Strategy,
 };
-use std::cmp::Ordering;
+use std::{cmp::Ordering, ops::Range};
 use ulid::Ulid;
+
+// TODO:
+// Create a high-level interface to ensure
+// there's atleast single pre-configured partition.
 
 #[derive(Debug, Default)]
 pub struct Partitions {
@@ -62,15 +66,17 @@ impl Partitions {
 
     /// Returns `true` if there're no partitions,
     /// `false` otherwise.
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.partitions.is_empty()
     }
 
     /// Get index based on the strategy.
     pub fn rotate(&self) -> usize {
-        self.strategy.rotate(&self.count())
+        self.strategy.rotate(self.count())
     }
 
+    /// Defines the insertion criterion.
     fn try_insert<F>(&mut self, mut f: F, partition: Partition) -> Result<(), Error>
     where
         F: FnMut(Partition, &mut Self),
@@ -112,10 +118,6 @@ impl Partitions {
         self.partitions.push(partition);
     }
 
-    // TODO:
-    // Create a high-level interface to ensure
-    // there's atleast single pre-configured partition.
-
     /// Insert a partition at specified index.
     fn insert_at_inner(&mut self, partition: Partition, idx: usize) {
         self.partitions.insert(idx, partition)
@@ -127,12 +129,15 @@ pub struct Partition {
     /// Partition id.
     pub id: Ulid,
 
+    /// Partition Range
+    pub range: Option<Range<usize>>,
+
     /// Underlying storage.
     pub storage: Storage,
 }
 
 impl Partition {
-    /// Creates new instance
+    /// Creates new instance.
     pub fn new() -> Self {
         Self {
             id: Ulid::new(),
@@ -140,18 +145,26 @@ impl Partition {
         }
     }
 
-    /// Sets the storage for partition
+    /// Sets the storage for partition.
     pub fn with_storage(mut self, storage: Storage) -> Self {
         self.storage = storage;
+        self
+    }
+
+    /// Sets the ranged partition.
+    pub fn with_range(mut self, range: Range<usize>) -> Self {
+        self.range = Some(range);
         self
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use ulid::Ulid;
+
     use super::{Partition, Partitions};
     use crate::strategy::Strategy;
-    use std::sync::atomic::AtomicUsize;
+    use std::{ops::Range, sync::atomic::AtomicUsize};
 
     #[test]
     fn test_partitions_insertion_failed() {
@@ -175,9 +188,7 @@ mod tests {
     #[test]
     fn test_partitions_with_round_robin_strategy() {
         // Define round robin strategy.
-        let round_robin = Strategy::RoundRobin {
-            idx: AtomicUsize::new(usize::MAX),
-        };
+        let round_robin = Strategy::RoundRobin(AtomicUsize::new(usize::MAX));
 
         // Create partitions.
         let mut partitions = Partitions::new().with_strategy(round_robin);
@@ -211,5 +222,48 @@ mod tests {
         (1..=5).for_each(|_| {
             (0..=8).for_each(|result| assert_eq!(result, partitions.rotate()));
         })
+    }
+
+    #[test]
+    fn test_design_pattern() {
+        #[derive(Clone, Debug, Default)]
+        pub struct Partition {
+            /// Partition id.
+            pub id: Ulid,
+
+            /// Partition Range
+            pub range: Option<Range<usize>>,
+        }
+
+        impl Partition {
+            /// Creates new instance
+            pub fn new() -> Self {
+                Self {
+                    id: Ulid::new(),
+                    ..Default::default()
+                }
+            }
+
+            /// Sets the storage for partition
+            pub fn with_range(mut self, range: Range<usize>) -> impl RangedPartition {
+                self.range = Some(range);
+                self
+            }
+        }
+
+        pub trait RangedPartition {
+            fn route(&self);
+            fn get_ranges() -> usize;
+        }
+
+        impl RangedPartition for Partition {
+            fn route(&self) {}
+
+            fn get_ranges() -> usize {
+                0
+            }
+        }
+
+        let partition_one = Partition::new().with_range(0..12);
     }
 }
