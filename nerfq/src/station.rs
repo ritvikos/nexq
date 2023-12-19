@@ -62,8 +62,8 @@ impl Stations {
 
     // Returns `true` if max_count < count.
     fn within_bounds(&self) -> bool {
-        match &self.max_count {
-            Some(max_count) => self.count() < *max_count,
+        match self.max_count {
+            Some(max_count) => self.count() < max_count,
             None => true,
         }
     }

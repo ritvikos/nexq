@@ -2,7 +2,7 @@ extern crate ulid;
 
 use crate::{
     error::{Error, Kind, PartitionError},
-    storage::Storage,
+    storage::Store,
     strategy::Strategy,
 };
 use std::{cmp::Ordering, ops::Range};
@@ -103,24 +103,9 @@ impl Partitions {
         self.try_insert(f, partition)
     }
 
-    /// Insert a partition at specified index with custom configuration. \
-    /// Ensure that partitions aren't empty.
-    pub fn insert_at(&mut self, partition: Partition, idx: usize) -> Result<(), Error> {
-        let f = |partition: Partition, partitions: &mut Self| {
-            partitions.insert_at_inner(partition, idx)
-        };
-
-        self.try_insert(f, partition)
-    }
-
     /// Insert a partition.
     fn insert_inner(&mut self, partition: Partition) {
         self.partitions.push(partition);
-    }
-
-    /// Insert a partition at specified index.
-    fn insert_at_inner(&mut self, partition: Partition, idx: usize) {
-        self.partitions.insert(idx, partition)
     }
 }
 
@@ -133,7 +118,7 @@ pub struct Partition {
     pub range: Option<Range<usize>>,
 
     /// Underlying storage.
-    pub storage: Storage,
+    pub store: Store,
 }
 
 impl Partition {
@@ -146,8 +131,8 @@ impl Partition {
     }
 
     /// Sets the storage for partition.
-    pub fn with_storage(mut self, storage: Storage) -> Self {
-        self.storage = storage;
+    pub fn with_store(mut self, store: Store) -> Self {
+        self.store = store;
         self
     }
 
@@ -222,48 +207,5 @@ mod tests {
         (1..=5).for_each(|_| {
             (0..=8).for_each(|result| assert_eq!(result, partitions.rotate()));
         })
-    }
-
-    #[test]
-    fn test_design_pattern() {
-        #[derive(Clone, Debug, Default)]
-        pub struct Partition {
-            /// Partition id.
-            pub id: Ulid,
-
-            /// Partition Range
-            pub range: Option<Range<usize>>,
-        }
-
-        impl Partition {
-            /// Creates new instance
-            pub fn new() -> Self {
-                Self {
-                    id: Ulid::new(),
-                    ..Default::default()
-                }
-            }
-
-            /// Sets the storage for partition
-            pub fn with_range(mut self, range: Range<usize>) -> impl RangedPartition {
-                self.range = Some(range);
-                self
-            }
-        }
-
-        pub trait RangedPartition {
-            fn route(&self);
-            fn get_ranges() -> usize;
-        }
-
-        impl RangedPartition for Partition {
-            fn route(&self) {}
-
-            fn get_ranges() -> usize {
-                0
-            }
-        }
-
-        let partition_one = Partition::new().with_range(0..12);
     }
 }
