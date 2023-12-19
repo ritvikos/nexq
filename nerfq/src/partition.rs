@@ -13,8 +13,8 @@ use ulid::Ulid;
 // there's atleast single pre-configured partition.
 
 #[derive(Debug, Default)]
-pub struct Partitions {
-    /// Partitions
+pub struct PartitionManager {
+    /// PartitionManager
     pub partitions: Vec<Partition>,
 
     /// Max number of partitions
@@ -24,7 +24,7 @@ pub struct Partitions {
     strategy: Strategy,
 }
 
-impl Clone for Partitions {
+impl Clone for PartitionManager {
     fn clone(&self) -> Self {
         Self {
             partitions: self.partitions.clone(),
@@ -34,7 +34,7 @@ impl Clone for Partitions {
     }
 }
 
-impl Partitions {
+impl PartitionManager {
     /// Create a new instance.
     pub fn new() -> Self {
         Self::default()
@@ -145,11 +145,9 @@ impl Partition {
 
 #[cfg(test)]
 mod tests {
-    use ulid::Ulid;
-
-    use super::{Partition, Partitions};
+    use super::{Partition, PartitionManager};
     use crate::strategy::Strategy;
-    use std::{ops::Range, sync::atomic::AtomicUsize};
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn test_partitions_insertion_failed() {
@@ -160,7 +158,7 @@ mod tests {
 
         // Create partitions with maximum count condition.
         // Means, it cannot hold more than 2 partition.
-        let mut partitions = Partitions::new().with_max_count(2);
+        let mut partitions = PartitionManager::new().with_max_count(2);
 
         assert!(partitions.insert(one).is_ok());
         assert!(partitions.insert(two).is_ok());
@@ -176,7 +174,7 @@ mod tests {
         let round_robin = Strategy::RoundRobin(AtomicUsize::new(usize::MAX));
 
         // Create partitions.
-        let mut partitions = Partitions::new().with_strategy(round_robin);
+        let mut partitions = PartitionManager::new().with_strategy(round_robin);
 
         // Insert 4 partition.
         (1..=4).for_each(|_| {
