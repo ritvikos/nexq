@@ -2,7 +2,7 @@ use crate::queue::Queue;
 
 /// Storage
 #[derive(Clone, Debug)]
-pub enum Storage {
+pub enum Store {
     /// In-Memory
     Memory(Queue),
 
@@ -10,7 +10,7 @@ pub enum Storage {
     Persistent(),
 }
 
-impl Default for Storage {
+impl Default for Store {
     fn default() -> Self {
         Self::Memory(Queue::default())
     }
