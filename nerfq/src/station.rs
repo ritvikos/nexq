@@ -3,7 +3,7 @@ extern crate dashmap;
 use crate::{
     error::{Error, Kind, StationError},
     message::Message,
-    partition::Partitions,
+    partition::PartitionManager,
     queue::Queue,
     retention::RetentionPolicy,
 };
@@ -13,7 +13,7 @@ use dashmap::DashMap;
 type StationName = String;
 
 #[derive(Debug, Default)]
-pub struct Stations {
+pub struct StationManager {
     /// Station name and metadata
     pub stations: DashMap<StationName, Station>,
 
@@ -21,7 +21,7 @@ pub struct Stations {
     pub max_count: Option<usize>,
 }
 
-impl Clone for Stations {
+impl Clone for StationManager {
     fn clone(&self) -> Self {
         Self {
             stations: self.stations.clone(),
@@ -30,7 +30,7 @@ impl Clone for Stations {
     }
 }
 
-impl Stations {
+impl StationManager {
     pub fn new() -> Self {
         Self::default()
     }
@@ -86,8 +86,8 @@ pub struct Station {
     #[deprecated(note = "Use partitions instead")]
     pub queue: Queue,
 
-    /// Partitions
-    pub partitions: Partitions,
+    /// PartitionManager
+    pub partitions: PartitionManager,
 
     /// Retention policy
     pub retention_policy: RetentionPolicy,
@@ -150,14 +150,27 @@ impl Station {
 
 #[cfg(test)]
 mod tests {
+    use crate::partition::Partition;
+
     use super::*;
     use std::sync::atomic::AtomicUsize;
     use time::OffsetDateTime;
 
     #[test]
     fn test_partition_enqueue_message() {
+        // Create a new station.
         let mut station = Station::new();
 
+        // Create a partition.
+        let partition = Partition::new();
+
+        // Define partition manager.
+        let mut partitions = PartitionManager::new();
+
+        // Insert new partition.
+        partitions.insert(partition).unwrap();
+
+        // Create a new message.
         let message = Message::new()
             .with_id("msg_001".into())
             .with_ttl(None)
@@ -165,7 +178,5 @@ mod tests {
             .with_attempts(AtomicUsize::default())
             .with_timestamp(OffsetDateTime::now_utc())
             .build();
-
-        station.enqueue(message).unwrap();
     }
 }

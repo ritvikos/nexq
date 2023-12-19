@@ -9,12 +9,12 @@ pub mod station;
 pub mod storage;
 pub mod strategy;
 
-use station::Stations;
+use station::StationManager;
 
 #[derive(Clone, Debug)]
 pub struct NerfBroker {
     /// Station name and metadata
-    pub stations: Stations,
+    pub stations: StationManager,
 }
 
 #[cfg(test)]
@@ -22,7 +22,7 @@ mod tests {
     use crate::{
         queue::Queue,
         retention::RetentionPolicy,
-        station::{Station, Stations},
+        station::{Station, StationManager},
         NerfBroker,
     };
     use std::{
@@ -57,7 +57,7 @@ mod tests {
             .with_retention_policy(retention_policy_two)
             .with_queue(queue_two);
 
-        let stations = Stations::new();
+        let stations = StationManager::new();
         stations.insert(station_one).unwrap();
         stations.insert(station_two).unwrap();
 
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn test_broker_insert_multiple_stations_standalone() {
         let broker = NerfBroker {
-            stations: Stations::new(),
+            stations: StationManager::new(),
         };
 
         // single threaded
@@ -88,7 +88,7 @@ mod tests {
         let iterations_per_thread = 5;
 
         let broker = NerfBroker {
-            stations: Stations::new(),
+            stations: StationManager::new(),
         };
 
         (0..thread_count).for_each(|_| {
@@ -117,7 +117,7 @@ mod tests {
         let mut handles = vec![];
 
         let broker = NerfBroker {
-            stations: Stations::new(),
+            stations: StationManager::new(),
         };
 
         let broker_arc = Arc::new(Mutex::new(broker));
