@@ -1,7 +1,10 @@
 extern crate time;
 
+use crate::hash;
+use murmur3::murmur3_32;
 use std::{
     collections::HashMap,
+    io::Cursor,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use time::{Duration, OffsetDateTime};
@@ -28,6 +31,9 @@ pub struct Message {
 
     /// Acknowledgement status
     pub ack: AtomicBool,
+
+    /// Partition Key
+    pub key: Option<Key>,
 }
 
 impl Clone for Message {
@@ -40,6 +46,7 @@ impl Clone for Message {
             ttl: self.ttl,
             timestamp: self.timestamp,
             ack: AtomicBool::new(self.ack.load(Ordering::Acquire)),
+            key: self.key.clone(),
         }
     }
 }
@@ -54,6 +61,7 @@ impl Default for Message {
             timestamp: OffsetDateTime::now_utc(),
             ttl: None,
             ack: AtomicBool::default(),
+            key: None,
         }
     }
 }
@@ -75,6 +83,11 @@ impl Message {
 
     pub fn with_metadata(mut self, metadata: HashMap<String, Vec<String>>) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    pub fn with_key(mut self, key: Option<Key>) -> Self {
+        self.key = key;
         self
     }
 
@@ -102,6 +115,54 @@ impl Message {
             timestamp: self.timestamp,
             ttl: self.ttl,
             ack: self.ack,
+            key: self.key,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Key {
+    Hash(String),
+}
+
+pub trait ToKey {
+    fn to_key(self) -> Key;
+}
+
+impl ToKey for String {
+    fn to_key(self) -> Key {
+        Key::Hash(self)
+    }
+}
+
+pub trait ToHash {
+    fn to_hash(&self) -> usize;
+}
+
+impl<T: AsRef<str>> ToHash for T {
+    fn to_hash(&self) -> usize {
+        hash!(self.as_ref())
+    }
+}
+
+#[macro_export]
+macro_rules! hash {
+    ($string:expr) => {
+        murmur3_32(&mut Cursor::new($string), 0).unwrap() as usize
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::message::ToHash;
+    use murmur3::murmur3_32;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_message_key() {
+        let key = "test key".to_string();
+
+        println!("{:?}", &key.to_hash());
+        println!("{:?}", hash!(key));
     }
 }

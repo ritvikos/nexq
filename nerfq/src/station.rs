@@ -86,7 +86,7 @@ pub struct Station {
     #[deprecated(note = "Use partitions instead")]
     pub queue: Queue,
 
-    /// PartitionManager
+    /// Partition Manager
     pub partitions: PartitionManager,
 
     /// Retention policy

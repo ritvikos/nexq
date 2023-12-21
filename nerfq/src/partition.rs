@@ -2,26 +2,28 @@ extern crate ulid;
 
 use crate::{
     error::{Error, Kind, PartitionError},
+    message::{Key, Message, ToHash},
     storage::Store,
-    strategy::Strategy,
 };
-use std::{cmp::Ordering, ops::Range};
+use std::{
+    borrow::BorrowMut,
+    cmp::Ordering,
+    sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
+};
 use ulid::Ulid;
 
-// TODO:
-// Create a high-level interface to ensure
-// there's atleast single pre-configured partition.
+const INCREMENT_UNIT: usize = 1;
 
 #[derive(Debug, Default)]
 pub struct PartitionManager {
-    /// PartitionManager
+    /// Partition Manager
     pub partitions: Vec<Partition>,
 
     /// Max number of partitions
     pub max_count: Option<usize>,
 
-    /// Partitioning Strategy
-    strategy: Strategy,
+    // Track state.
+    state: PartitionState,
 }
 
 impl Clone for PartitionManager {
@@ -29,7 +31,7 @@ impl Clone for PartitionManager {
         Self {
             partitions: self.partitions.clone(),
             max_count: self.max_count,
-            strategy: self.strategy.clone(),
+            state: self.state.clone(),
         }
     }
 }
@@ -52,12 +54,6 @@ impl PartitionManager {
         self
     }
 
-    /// Set partitioning strategy.
-    pub fn with_strategy(mut self, strategy: Strategy) -> Self {
-        self.strategy = strategy;
-        self
-    }
-
     /// Get total number of partitions.
     #[inline(always)]
     pub fn count(&self) -> usize {
@@ -71,9 +67,37 @@ impl PartitionManager {
         self.partitions.is_empty()
     }
 
-    /// Get index based on the strategy.
-    pub fn rotate(&self) -> usize {
-        self.strategy.rotate(self.count())
+    /// Insert a partition with custom configuration.
+    pub fn insert(&mut self, partition: Partition) -> Result<(), Error> {
+        let f = |partition: Partition, partitions: &mut Self| partitions.insert_inner(partition);
+
+        self.try_insert(f, partition)
+    }
+
+    /// Insert a partition at specified index with custom configuration. \
+    /// Ensure that partitions aren't empty.
+    pub fn insert_at(&mut self, partition: Partition, idx: usize) -> Result<(), Error> {
+        let f = |partition: Partition, partitions: &mut Self| {
+            partitions.insert_at_inner(partition, idx)
+        };
+
+        self.try_insert(f, partition)
+    }
+
+    /// Insert a message based on the availability key.
+    pub fn insert_message(&mut self, message: Message) -> Result<(), Error> {
+        match &message.key {
+            Some(key) => match key {
+                Key::Hash(key) => {
+                    dbg!(self.hash_key(key));
+                    Ok(())
+                }
+            },
+            None => {
+                let idx = self.round_robin();
+                self.insert_message_inner(idx)
+            }
+        }
     }
 
     /// Defines the insertion criterion.
@@ -97,15 +121,35 @@ impl PartitionManager {
         }
     }
 
-    /// Insert a partition with custom configuration.
-    pub fn insert(&mut self, partition: Partition) -> Result<(), Error> {
-        let f = |partition: Partition, partitions: &mut Self| partitions.insert_inner(partition);
-        self.try_insert(f, partition)
-    }
-
     /// Insert a partition.
     fn insert_inner(&mut self, partition: Partition) {
         self.partitions.push(partition);
+    }
+
+    /// Insert a partition at specified index.
+    fn insert_at_inner(&mut self, partition: Partition, idx: usize) {
+        self.partitions.insert(idx, partition)
+    }
+
+    /// Round robin strategy.
+    fn round_robin(&mut self) -> usize {
+        self.state
+            .round_robin
+            .fetch_add(INCREMENT_UNIT, AtomicOrdering::AcqRel)
+            % self.count()
+    }
+
+    /// Hash based strategy.
+    fn hash_key(&self, key: &str) -> usize {
+        key.to_hash() % self.count()
+    }
+
+    // Insert a message.
+    fn insert_message_inner(&mut self, idx: usize) -> Result<(), Error> {
+        // let partition = self.get_partition_mut(idx);
+        // partition.store.
+        println!("insert message at idx: {}", idx);
+        todo!()
     }
 }
 
@@ -114,8 +158,8 @@ pub struct Partition {
     /// Partition id.
     pub id: Ulid,
 
-    /// Partition Range
-    pub range: Option<Range<usize>>,
+    /// Replicas
+    pub replicas: usize,
 
     /// Underlying storage.
     pub store: Store,
@@ -135,18 +179,38 @@ impl Partition {
         self.store = store;
         self
     }
+}
 
-    /// Sets the ranged partition.
-    pub fn with_range(mut self, range: Range<usize>) -> Self {
-        self.range = Some(range);
-        self
+#[derive(Debug)]
+struct PartitionState {
+    pub round_robin: AtomicUsize,
+}
+
+impl Default for PartitionState {
+    fn default() -> Self {
+        Self {
+            round_robin: AtomicUsize::new(usize::MAX),
+        }
+    }
+}
+
+impl Clone for PartitionState {
+    fn clone(&self) -> Self {
+        Self {
+            round_robin: AtomicUsize::new(self.round_robin.load(AtomicOrdering::Acquire)),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use time::OffsetDateTime;
+
     use super::{Partition, PartitionManager};
-    use crate::strategy::Strategy;
+    use crate::{
+        message::{Key, Message},
+        partition::PartitionState,
+    };
     use std::sync::atomic::AtomicUsize;
 
     #[test]
@@ -170,40 +234,67 @@ mod tests {
 
     #[test]
     fn test_partitions_with_round_robin_strategy() {
-        // Define round robin strategy.
-        let round_robin = Strategy::RoundRobin(AtomicUsize::new(usize::MAX));
-
-        // Create partitions.
-        let mut partitions = PartitionManager::new().with_strategy(round_robin);
+        // Create partition manager.
+        let mut manager = PartitionManager {
+            state: PartitionState {
+                round_robin: AtomicUsize::new(0),
+            },
+            ..Default::default()
+        };
 
         // Insert 4 partition.
         (1..=4).for_each(|_| {
             let partition = Partition::new();
-            partitions.insert(partition).unwrap();
+            manager.insert(partition).unwrap();
         });
 
         // Check the overflow scenario.
-        assert_eq!(3, partitions.rotate()); // chooses 4th partition (3rd index)
+        assert_eq!(3, manager.round_robin()); // chooses 4th partition (3rd index)
 
         // Iterate the newly inserted partitions.
         [0, 1, 2, 3].iter().for_each(|result| {
-            assert_eq!(result, &partitions.rotate());
+            assert_eq!(result, &manager.round_robin());
         });
 
         // Insert 5 more partition.
         (1..=5).for_each(|_| {
             let partition = Partition::new();
-            partitions.insert(partition).unwrap();
+            manager.insert(partition).unwrap();
         });
 
         // Newly inserted partitions are taken into consideration.
         [4, 5, 6, 7, 8].iter().for_each(|result| {
-            assert_eq!(result, &partitions.rotate());
+            assert_eq!(result, &manager.round_robin());
         });
 
         // Final iterations.
         (1..=5).for_each(|_| {
-            (0..=8).for_each(|result| assert_eq!(result, partitions.rotate()));
+            (0..=8).for_each(|result| assert_eq!(result, manager.round_robin()));
         })
+    }
+
+    #[test]
+    fn test_partitions_insert_message_with_key_hash_strategy() {
+        // Create partition manager.
+        let mut manager = PartitionManager::new();
+
+        // Insert 4 partition.
+        (1..=4).for_each(|_| {
+            let partition = Partition::new();
+            manager.insert(partition).unwrap();
+        });
+
+        // Create a new Message.
+        let message = Message::new()
+            .with_id("msg_001".into())
+            .with_ttl(None)
+            .with_payload("payload_001".into())
+            .with_attempts(AtomicUsize::default())
+            .with_timestamp(OffsetDateTime::now_utc())
+            .with_key(Some(Key::Hash("test key".to_string())))
+            .build();
+
+        // Insert the message in the partition.
+        manager.insert_message(message).unwrap();
     }
 }
