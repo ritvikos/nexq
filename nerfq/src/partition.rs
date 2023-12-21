@@ -146,10 +146,14 @@ impl PartitionManager {
 
     // Insert a message.
     fn insert_message_inner(&mut self, idx: usize) -> Result<(), Error> {
-        // let partition = self.get_partition_mut(idx);
-        // partition.store.
+        let partition = self.get_partition_mut(idx);
         println!("insert message at idx: {}", idx);
         todo!()
+    }
+
+    // Get partition by index.
+    fn get_partition_mut(&mut self, idx: usize) -> &mut Partition {
+        self.partitions[idx].borrow_mut()
     }
 }
 
@@ -189,7 +193,7 @@ struct PartitionState {
 impl Default for PartitionState {
     fn default() -> Self {
         Self {
-            round_robin: AtomicUsize::new(usize::MAX),
+            round_robin: AtomicUsize::new(0),
         }
     }
 }
@@ -237,7 +241,7 @@ mod tests {
         // Create partition manager.
         let mut manager = PartitionManager {
             state: PartitionState {
-                round_robin: AtomicUsize::new(0),
+                round_robin: AtomicUsize::new(usize::MAX),
             },
             ..Default::default()
         };
