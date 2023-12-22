@@ -158,11 +158,13 @@ mod tests {
     use murmur3::murmur3_32;
     use std::io::Cursor;
 
+    const OUTPUT: usize = 320927739;
+
     #[test]
     fn test_message_key() {
         let key = "test key".to_string();
 
-        println!("{:?}", &key.to_hash());
-        println!("{:?}", hash!(key));
+        assert_eq!(OUTPUT, key.to_hash());
+        assert_eq!(OUTPUT, hash!(key))
     }
 }
