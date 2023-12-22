@@ -1,3 +1,4 @@
+extern crate time;
 extern crate ulid;
 
 use crate::{
@@ -10,30 +11,24 @@ use std::{
     cmp::Ordering,
     sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
 };
+use time::OffsetDateTime;
 use ulid::Ulid;
 
 const INCREMENT_UNIT: usize = 1;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PartitionManager {
     /// Partition Manager
     pub partitions: Vec<Partition>,
 
-    /// Max number of partitions
-    pub max_count: Option<usize>,
+    /// Config
+    pub config: Config,
 
-    // Track state.
-    state: PartitionState,
-}
+    /// Metadata
+    metadata: Metadata,
 
-impl Clone for PartitionManager {
-    fn clone(&self) -> Self {
-        Self {
-            partitions: self.partitions.clone(),
-            max_count: self.max_count,
-            state: self.state.clone(),
-        }
-    }
+    // Track internal state
+    state: State,
 }
 
 impl PartitionManager {
@@ -50,7 +45,7 @@ impl PartitionManager {
 
     /// Set max count limit.
     pub fn with_max_count(mut self, max_count: usize) -> Self {
-        self.max_count = Some(max_count);
+        self.config.max_count = Some(max_count);
         self
     }
 
@@ -105,7 +100,7 @@ impl PartitionManager {
     where
         F: FnMut(Partition, &mut Self),
     {
-        if let Some(ref max_count) = self.max_count {
+        if let Some(ref max_count) = self.config.max_count {
             match self.count().cmp(max_count) {
                 Ordering::Less => {
                     f(partition, self);
@@ -158,6 +153,15 @@ impl PartitionManager {
 }
 
 #[derive(Clone, Debug, Default)]
+pub struct Config {
+    /// Max number of partitions
+    pub max_count: Option<usize>,
+
+    /// Rate Limit
+    pub rate_limit: bool,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct Partition {
     /// Partition id.
     pub id: Ulid,
@@ -185,12 +189,28 @@ impl Partition {
     }
 }
 
+/// Metadata
+#[derive(Clone, Debug)]
+struct Metadata {
+    /// Time at which last partition was inserted.
+    last_inserted_at: OffsetDateTime,
+}
+
+impl Default for Metadata {
+    fn default() -> Self {
+        Self {
+            last_inserted_at: OffsetDateTime::now_utc(),
+        }
+    }
+}
+
+/// State
 #[derive(Debug)]
-struct PartitionState {
+struct State {
     pub round_robin: AtomicUsize,
 }
 
-impl Default for PartitionState {
+impl Default for State {
     fn default() -> Self {
         Self {
             round_robin: AtomicUsize::new(0),
@@ -198,7 +218,7 @@ impl Default for PartitionState {
     }
 }
 
-impl Clone for PartitionState {
+impl Clone for State {
     fn clone(&self) -> Self {
         Self {
             round_robin: AtomicUsize::new(self.round_robin.load(AtomicOrdering::Acquire)),
@@ -208,14 +228,13 @@ impl Clone for PartitionState {
 
 #[cfg(test)]
 mod tests {
-    use time::OffsetDateTime;
-
     use super::{Partition, PartitionManager};
     use crate::{
         message::{Key, Message},
-        partition::PartitionState,
+        partition::State,
     };
     use std::sync::atomic::AtomicUsize;
+    use time::OffsetDateTime;
 
     #[test]
     fn test_partitions_insertion_failed() {
@@ -240,7 +259,7 @@ mod tests {
     fn test_partitions_with_round_robin_strategy() {
         // Create partition manager.
         let mut manager = PartitionManager {
-            state: PartitionState {
+            state: State {
                 round_robin: AtomicUsize::new(usize::MAX),
             },
             ..Default::default()
