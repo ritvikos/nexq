@@ -3,7 +3,7 @@ extern crate dashmap;
 use crate::{
     error::{Error, Kind, StationError},
     message::Message,
-    partition::PartitionManager,
+    partition::manager::PartitionManager,
     queue::Queue,
     retention::RetentionPolicy,
 };

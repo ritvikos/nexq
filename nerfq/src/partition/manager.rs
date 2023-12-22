@@ -1,18 +1,9 @@
-extern crate time;
-extern crate ulid;
-
 use crate::{
     error::{Error, Kind, PartitionError},
     message::{Key, Message, ToHash},
-    storage::Store,
+    partition::{config::Config, metadata::Metadata, state::State, Partition},
 };
-use std::{
-    borrow::BorrowMut,
-    cmp::Ordering,
-    sync::atomic::{AtomicUsize, Ordering as AtomicOrdering},
-};
-use time::OffsetDateTime;
-use ulid::Ulid;
+use std::{borrow::BorrowMut, cmp::Ordering, sync::atomic::Ordering as AtomicOrdering};
 
 const INCREMENT_UNIT: usize = 1;
 
@@ -25,10 +16,10 @@ pub struct PartitionManager {
     pub config: Config,
 
     /// Metadata
-    metadata: Metadata,
+    pub metadata: Metadata,
 
     // Track internal state
-    state: State,
+    pub state: State,
 }
 
 impl PartitionManager {
@@ -50,14 +41,14 @@ impl PartitionManager {
     }
 
     /// Get total number of partitions.
-    #[inline(always)]
+    #[inline]
     pub fn count(&self) -> usize {
         self.partitions.len()
     }
 
     /// Returns `true` if there're no partitions,
     /// `false` otherwise.
-    #[inline(always)]
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.partitions.is_empty()
     }
@@ -116,6 +107,19 @@ impl PartitionManager {
         }
     }
 
+    /// Round robin strategy.
+    pub fn round_robin(&mut self) -> usize {
+        self.state
+            .round_robin
+            .fetch_add(INCREMENT_UNIT, AtomicOrdering::AcqRel)
+            % self.count()
+    }
+
+    /// Hash based strategy.
+    pub fn hash_key(&self, key: &str) -> usize {
+        key.to_hash() % self.count()
+    }
+
     /// Insert a partition.
     fn insert_inner(&mut self, partition: Partition) {
         self.partitions.push(partition);
@@ -126,103 +130,16 @@ impl PartitionManager {
         self.partitions.insert(idx, partition)
     }
 
-    /// Round robin strategy.
-    fn round_robin(&mut self) -> usize {
-        self.state
-            .round_robin
-            .fetch_add(INCREMENT_UNIT, AtomicOrdering::AcqRel)
-            % self.count()
-    }
-
-    /// Hash based strategy.
-    fn hash_key(&self, key: &str) -> usize {
-        key.to_hash() % self.count()
-    }
-
     // Insert a message.
-    fn insert_message_inner(&mut self, idx: usize) -> Result<(), Error> {
-        let partition = self.get_partition_mut(idx);
+    pub(crate) fn insert_message_inner(&mut self, idx: usize) -> Result<(), Error> {
+        let partition = self.partition_mut(idx);
         println!("insert message at idx: {}", idx);
         todo!()
     }
 
     // Get partition by index.
-    fn get_partition_mut(&mut self, idx: usize) -> &mut Partition {
+    fn partition_mut(&mut self, idx: usize) -> &mut Partition {
         self.partitions[idx].borrow_mut()
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Config {
-    /// Max number of partitions
-    pub max_count: Option<usize>,
-
-    /// Rate Limit
-    pub rate_limit: bool,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Partition {
-    /// Partition id.
-    pub id: Ulid,
-
-    /// Replicas
-    pub replicas: usize,
-
-    /// Underlying storage.
-    pub store: Store,
-}
-
-impl Partition {
-    /// Creates new instance.
-    pub fn new() -> Self {
-        Self {
-            id: Ulid::new(),
-            ..Default::default()
-        }
-    }
-
-    /// Sets the storage for partition.
-    pub fn with_store(mut self, store: Store) -> Self {
-        self.store = store;
-        self
-    }
-}
-
-/// Metadata
-#[derive(Clone, Debug)]
-struct Metadata {
-    /// Time at which last partition was inserted.
-    last_inserted_at: OffsetDateTime,
-}
-
-impl Default for Metadata {
-    fn default() -> Self {
-        Self {
-            last_inserted_at: OffsetDateTime::now_utc(),
-        }
-    }
-}
-
-/// State
-#[derive(Debug)]
-struct State {
-    pub round_robin: AtomicUsize,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            round_robin: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl Clone for State {
-    fn clone(&self) -> Self {
-        Self {
-            round_robin: AtomicUsize::new(self.round_robin.load(AtomicOrdering::Acquire)),
-        }
     }
 }
 
@@ -231,13 +148,13 @@ mod tests {
     use super::{Partition, PartitionManager};
     use crate::{
         message::{Key, Message},
-        partition::State,
+        partition::state::State,
     };
     use std::sync::atomic::AtomicUsize;
     use time::OffsetDateTime;
 
     #[test]
-    fn test_partitions_insertion_failed() {
+    fn test_partition_manager_insertion_failed() {
         // Create 3 partition.
         let one = Partition::new();
         let two = Partition::new();
@@ -256,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn test_partitions_with_round_robin_strategy() {
+    fn test_partition_manager_with_round_robin_strategy() {
         // Create partition manager.
         let mut manager = PartitionManager {
             state: State {
@@ -297,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn test_partitions_insert_message_with_key_hash_strategy() {
+    fn test_partition_manager_insert_message_with_key_hash_strategy() {
         // Create partition manager.
         let mut manager = PartitionManager::new();
 
