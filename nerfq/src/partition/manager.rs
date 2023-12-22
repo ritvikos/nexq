@@ -1,12 +1,11 @@
 use crate::{
     error::{Error, Kind, PartitionError},
-    message::{Key, Message, ToHash},
+    message::{hash::ToHash, key::Key, Message},
     partition::{config::Config, metadata::Metadata, state::State, Partition},
 };
 use std::{borrow::BorrowMut, cmp::Ordering, sync::atomic::Ordering as AtomicOrdering};
 
 const INCREMENT_UNIT: usize = 1;
-
 #[derive(Clone, Debug, Default)]
 pub struct PartitionManager {
     /// Partition Manager
@@ -147,7 +146,7 @@ impl PartitionManager {
 mod tests {
     use super::{Partition, PartitionManager};
     use crate::{
-        message::{Key, Message},
+        message::{key::Key, Message},
         partition::state::State,
     };
     use std::sync::atomic::AtomicUsize;
@@ -226,12 +225,12 @@ mod tests {
 
         // Create a new Message.
         let message = Message::new()
-            .with_id("msg_001".into())
+            .with_id("msg_001")
             .with_ttl(None)
-            .with_payload("payload_001".into())
-            .with_attempts(AtomicUsize::default())
+            .with_payload("payload_001")
+            .with_attempts(0)
             .with_timestamp(OffsetDateTime::now_utc())
-            .with_key(Some(Key::Hash("test key".to_string())))
+            .with_key(Some(Key::Hash("test key".into())))
             .build();
 
         // Insert the message in the partition.

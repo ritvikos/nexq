@@ -172,9 +172,9 @@ mod tests {
 
         // Create a new message.
         let message = Message::new()
-            .with_id("msg_001".into())
+            .with_id("msg_001")
             .with_ttl(None)
-            .with_payload("payload_001".into())
+            .with_payload("payload_001")
             .with_attempts(AtomicUsize::default())
             .with_timestamp(OffsetDateTime::now_utc())
             .build();
