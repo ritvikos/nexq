@@ -1,13 +1,16 @@
 extern crate time;
 
-use crate::hash;
-use murmur3::murmur3_32;
+pub mod hash;
+pub mod key;
+
+use self::key::Key;
 use std::{
     collections::HashMap,
-    io::Cursor,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use time::{Duration, OffsetDateTime};
+
+type Metadata = HashMap<String, Vec<String>>;
 
 #[derive(Debug)]
 pub struct Message {
@@ -21,7 +24,7 @@ pub struct Message {
     pub attempts: AtomicUsize,
 
     /// Attached metadata
-    pub metadata: HashMap<String, Vec<String>>,
+    pub metadata: Option<Metadata>,
 
     /// Time to live
     pub ttl: Option<Duration>,
@@ -56,7 +59,7 @@ impl Default for Message {
         Self {
             id: String::default(),
             attempts: AtomicUsize::default(),
-            metadata: HashMap::default(),
+            metadata: None,
             payload: String::default(),
             timestamp: OffsetDateTime::now_utc(),
             ttl: None,
@@ -71,17 +74,31 @@ impl Message {
         Self::default()
     }
 
-    pub fn with_id(mut self, id: String) -> Self {
-        self.id = id;
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
         self
     }
 
-    pub fn with_attempts(mut self, attempts: AtomicUsize) -> Self {
-        self.attempts = attempts;
+    #[must_use]
+    pub fn with_attempts(mut self, attempts: impl Into<AtomicUsize>) -> Self {
+        self.attempts = attempts.into();
         self
     }
 
-    pub fn with_metadata(mut self, metadata: HashMap<String, Vec<String>>) -> Self {
+    #[must_use]
+    pub fn with_payload(mut self, payload: impl Into<String>) -> Self {
+        self.payload = payload.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_timestamp(mut self, timestamp: OffsetDateTime) -> Self {
+        self.timestamp = timestamp;
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: Option<Metadata>) -> Self {
         self.metadata = metadata;
         self
     }
@@ -91,21 +108,12 @@ impl Message {
         self
     }
 
-    pub fn with_payload(mut self, payload: String) -> Self {
-        self.payload = payload;
-        self
-    }
-
-    pub fn with_timestamp(mut self, timestamp: OffsetDateTime) -> Self {
-        self.timestamp = timestamp;
-        self
-    }
-
     pub fn with_ttl(mut self, ttl: Option<Duration>) -> Self {
         self.ttl = ttl;
         self
     }
 
+    #[must_use]
     pub fn build(self) -> Self {
         Self {
             id: self.id,
@@ -118,53 +126,46 @@ impl Message {
             key: self.key,
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum Key {
-    Hash(String),
-}
-
-pub trait ToKey {
-    fn to_key(self) -> Key;
-}
-
-impl ToKey for String {
-    fn to_key(self) -> Key {
-        Key::Hash(self)
+    /// Set acknowledgement status for the message.
+    pub fn ack(&mut self, ack: impl Into<AtomicBool>) {
+        self.ack = ack.into();
     }
-}
-
-pub trait ToHash {
-    fn to_hash(&self) -> usize;
-}
-
-impl<T: AsRef<str>> ToHash for T {
-    fn to_hash(&self) -> usize {
-        hash!(self.as_ref())
-    }
-}
-
-#[macro_export]
-macro_rules! hash {
-    ($string:expr) => {
-        murmur3_32(&mut Cursor::new($string), 0).unwrap() as usize
-    };
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::message::ToHash;
-    use murmur3::murmur3_32;
-    use std::io::Cursor;
+    use crate::message::{hash::ToHash, key::Key, Message};
+    use std::sync::atomic::Ordering;
+    use time::OffsetDateTime;
+    use ulid::Ulid;
 
-    const OUTPUT: usize = 320927739;
+    const HASH_OUTPUT: usize = 320927739;
 
     #[test]
-    fn test_message_key() {
-        let key = "test key".to_string();
+    fn test_message_ack() {
+        // Create id.
+        let id = Ulid::new();
 
-        assert_eq!(OUTPUT, key.to_hash());
-        assert_eq!(OUTPUT, hash!(key))
+        // Create a new Message.
+        let mut message = Message::new()
+            .with_id(id)
+            .with_ttl(None)
+            .with_payload("payload_001")
+            .with_attempts(0)
+            .with_timestamp(OffsetDateTime::now_utc())
+            .with_key(Some(Key::Hash("test key".to_string())))
+            .build();
+
+        // Acknowledge the message.
+        message.ack(true);
+
+        assert!(message.ack.load(Ordering::Relaxed))
+    }
+
+    #[test]
+    fn test_message_key_hash() {
+        let key = "test key".to_string();
+        assert_eq!(HASH_OUTPUT, key.to_hash());
     }
 }
