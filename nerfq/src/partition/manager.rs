@@ -6,6 +6,7 @@ use crate::{
 use std::{borrow::BorrowMut, cmp::Ordering, sync::atomic::Ordering as AtomicOrdering};
 
 const INCREMENT_UNIT: usize = 1;
+
 #[derive(Clone, Debug, Default)]
 pub struct PartitionManager {
     /// Partition Manager
