@@ -7,4 +7,4 @@ edition = "2021"
 members = ["nerfq"]
 
 [dependencies]
-mio = { version = "0.8.9", features = ["net", "os-poll"] }
+mio = { version = "0.8.11", features = ["net", "os-poll"] }
