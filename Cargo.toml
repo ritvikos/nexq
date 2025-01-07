@@ -1,10 +1,13 @@
 [package]
-name = "nerfq-exp"
+name = "nexq"
 version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["nerfq"]
+members = [
+  "crates/core"
+]
 
 [dependencies]
+nexq-core = { path = "crates/core" }
 mio = { version = "0.8.9", features = ["net", "os-poll"] }
