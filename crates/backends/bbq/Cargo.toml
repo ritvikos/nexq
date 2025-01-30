@@ -1,0 +1,15 @@
+[package]
+name = "bbq"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam-utils = "0.8.21"
+thiserror = "2.0.11"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "internal"
+harness = false
