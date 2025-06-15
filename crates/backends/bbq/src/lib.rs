@@ -10,14 +10,16 @@ use core::{
 use crossbeam_utils::CachePadded;
 use thiserror::Error;
 
+const VERSION_BIT_LEN: usize = 32;
+const OFFSET_BIT_LEN: usize = usize::BITS as usize - VERSION_BIT_LEN;
+
 pub struct QueueInner<T: Clone + Debug + Default> {
-    producer: RawHead,
-    consumer: RawHead,
+    producer: RawCursor,
+    consumer: RawCursor,
     blocks: Box<[Block<T>]>,
 
     total_blocks: usize,
     total_entries: usize,
-    shift: u32,
 
     _marker: PhantomData<T>,
 }
@@ -42,18 +44,12 @@ impl<T: Clone + Debug + Default> QueueInner<T> {
 
         Self::init(&mut blocks, default, total_blocks, total_entries);
 
-        let shift = max_u32(
-            usize::BITS - total_entries.leading_zeros() + 1,
-            usize::BITS - total_blocks.leading_zeros(),
-        );
-
         Self {
-            producer: RawHead::new(),
-            consumer: RawHead::new(),
+            producer: RawCursor::new(0),
+            consumer: RawCursor::new(0),
             blocks,
             total_blocks,
             total_entries,
-            shift,
             _marker: PhantomData,
         }
     }
@@ -85,12 +81,12 @@ impl<T: Clone + Debug + Default> Debug for QueueInner<T> {
 }
 
 impl<T: Clone + Debug + Default> QueueInner<T> {
-    pub fn enqueue(&self, value: T, shift: u32) -> Result<(), QueueError> {
+    pub fn enqueue(&self, value: T) -> Result<(), QueueError> {
         loop {
-            let head = self.producer.load_unpack(shift);
-            let block = unsafe { self.blocks.get_unchecked(head.index) };
+            let head = self.producer.load_unpack();
+            let block = unsafe { self.blocks.get_unchecked(head.offset) };
 
-            match block.push(self.total_entries, self.shift) {
+            match block.push(self.total_entries) {
                 State::Allocated(index) => {
                     block.commit(index, value);
                     return Ok(());
@@ -108,19 +104,13 @@ impl<T: Clone + Debug + Default> QueueInner<T> {
 
     fn dequeue(&self) -> Result<T, QueueError> {
         loop {
-            let head = self.consumer.load_unpack(self.shift);
-            let block = unsafe { self.blocks.get_unchecked(head.index) };
+            let head = self.consumer.load_unpack();
+            let block = unsafe { self.blocks.get_unchecked(head.offset) };
 
-            match block.pop(self.total_entries, self.shift) {
+            match block.pop(self.total_entries) {
                 State::Reserved(cursor) => {
                     let output = block.consume(cursor.offset);
                     return Ok(output);
-
-                    // if output != T::default() {
-                    //     return Ok(output);
-                    // }
-
-                    // continue;
                 }
                 State::NoSlot => todo!(),
                 State::Unavailable => todo!(),
@@ -135,34 +125,31 @@ impl<T: Clone + Debug + Default> QueueInner<T> {
         }
     }
 
-    fn advance_producer(&self, mut head: Head) -> State {
-        let next = (head.index + 1) % self.total_blocks;
+    fn advance_producer(&self, mut head: Cursor) -> State {
+        let next = (head.offset + 1) % self.total_blocks;
 
         let nblock = unsafe { self.blocks.get_unchecked(next) };
-        let consumed = nblock.load(CursorState::Consumed, self.shift);
+        let consumed = nblock.load(CursorState::Consumed);
 
         if consumed.version < head.version
             || (consumed.version == head.version && consumed.offset != self.total_entries)
         {
-            let reserved = nblock.load(CursorState::Reserved, self.shift);
+            let reserved = nblock.load(CursorState::Reserved);
             if reserved.offset == consumed.offset {
                 return State::NoSlot;
             }
             return State::Unavailable;
         }
 
-        let committed = Cursor::new(head.version + 1, 0).pack(self.shift);
+        let committed = Cursor::new(head.version + 1, 0).pack();
         nblock.cursor.committed.max(committed);
 
-        let allocated = Cursor::new(head.version + 1, 0).pack(self.shift);
+        let allocated = Cursor::new(head.version + 1, 0).pack();
         nblock.cursor.allocated.max(allocated);
 
-        head.index = (head.index + 1) % self.total_blocks;
-        if head.index == 0 {
-            head.version += 1
-        }
+        head.offset = (head.offset + 1) % self.total_blocks;
 
-        self.producer.max(head.pack(self.shift));
+        self.producer.max(head.pack());
 
         return State::Success;
     }
@@ -208,15 +195,15 @@ impl<T: Clone + Debug + Default> Block<T> {
         }
     }
 
-    fn push(&self, total_entries: usize, shift: u32) -> State {
-        let current = self.cursor.allocated.load_unpack(shift);
+    fn push(&self, total_entries: usize) -> State {
+        let current = self.cursor.allocated.load_unpack();
 
         if current.offset >= total_entries {
             return State::Full(current.version);
         }
 
         let raw = self.advance(CursorState::Allocated);
-        let current = Cursor::from(raw, shift);
+        let current = Cursor::from(raw);
 
         if current.offset >= total_entries {
             return State::Full(current.version);
@@ -225,7 +212,7 @@ impl<T: Clone + Debug + Default> Block<T> {
         State::Allocated(current.offset)
     }
 
-    fn pop(&self, entries: usize, shift: u32) -> State {
+    fn pop(&self, entries: usize) -> State {
         // TODO: Refactor
         // Instead of:
         // - `self.cursor.reserved.load(Ordering::Acquire)`
@@ -235,18 +222,18 @@ impl<T: Clone + Debug + Default> Block<T> {
         // - `self.load(cursor_state)` || `self.load_unpack(cursor_state)`
 
         loop {
-            let reserved_raw = self.cursor.reserved.load(Ordering::Acquire);
-            let reserved = self.cursor.reserved.unpack(reserved_raw, shift);
+            let reserved_raw = self.cursor.reserved.load(Ordering::SeqCst);
+            let reserved = self.cursor.reserved.unpack(reserved_raw);
 
             if reserved.offset < entries {
-                let committed = self.cursor.committed.load_unpack(shift);
+                let committed = self.cursor.committed.load_unpack();
 
                 if reserved.offset == committed.offset {
                     return State::NoSlot;
                 }
 
                 if committed.offset != entries {
-                    let allocated = self.cursor.allocated.load_unpack(shift);
+                    let allocated = self.cursor.allocated.load_unpack();
                     if allocated.offset != committed.offset {
                         return State::Unavailable;
                     }
@@ -294,8 +281,8 @@ impl<T: Clone + Debug + Default> Block<T> {
     }
 
     #[inline]
-    fn load(&self, state: CursorState, shift: u32) -> Cursor {
-        self.raw_cursor(state).load_unpack(shift)
+    fn load(&self, state: CursorState) -> Cursor {
+        self.raw_cursor(state).load_unpack()
     }
 
     // TODO: Maybe return [`Advanceable`]?
@@ -364,79 +351,6 @@ const fn max_u32(a: u32, b: u32) -> u32 {
     }
 }
 
-/// 2-bits for index and version:
-/// `index`: [`Block`] on which the queue is currently working on.
-/// `version`: Prevent ABA.
-///
-/// Structure:
-/// +----------------+-------------------+
-/// |    Version     |      Index        |
-/// +----------------+-------------------+
-///
-/// Rest of the bits are unused.
-#[derive(Debug)]
-struct RawHead(CachePadded<AtomicUsize>);
-
-impl RawHead {
-    #[inline]
-    fn new() -> Self {
-        Self::from(0)
-    }
-
-    /// Loads the raw data and unpacks into [`Head`].
-    fn load_unpack(&self, shift: u32) -> Head {
-        let raw = self.load(Ordering::Acquire);
-        Head::from(raw, shift)
-    }
-
-    #[inline]
-    fn load(&self, ordering: Ordering) -> usize {
-        self.0.load(ordering)
-    }
-
-    #[inline]
-    fn store(&self, value: usize, ordering: Ordering) {
-        self.0.store(value, ordering);
-    }
-
-    fn max(&self, head: usize) -> usize {
-        let mut ret = 0;
-        while let Err(_) = self
-            .0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
-                ret = old;
-                Some(core::cmp::max(head, old))
-            })
-        {}
-        ret
-    }
-}
-
-impl From<usize> for RawHead {
-    fn from(value: usize) -> Self {
-        Self(CachePadded::new(AtomicUsize::new(value)))
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct Head {
-    version: usize,
-    index: usize,
-}
-
-impl Head {
-    fn pack(&self, shift: u32) -> usize {
-        self.version << shift | self.index
-    }
-
-    fn from(value: usize, shift: u32) -> Self {
-        Self {
-            version: value >> shift,
-            index: (value & !(usize::MAX << shift)),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct Cursors<T: Clone + Advanceable> {
     allocated: T,
@@ -486,8 +400,20 @@ impl<T: Clone + Advanceable> Cursors<T> {
 /// Initially, idx and off in the first block are zero and for
 /// remaining blocks off is set to BLOCK_SIZE. The initial value
 /// of vsn will be introduced in Sec. 4.2.2.
-#[derive(Debug)]
+#[repr(transparent)]
 struct RawCursor(CachePadded<AtomicUsize>);
+
+impl Debug for RawCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self.load(Ordering::SeqCst);
+        let cursor = Cursor::from(value);
+        f.debug_struct("RawCursor")
+            .field("raw", &value)
+            .field("version", &cursor.version)
+            .field("offset", &cursor.offset)
+            .finish()
+    }
+}
 
 impl Clone for RawCursor {
     fn clone(&self) -> Self {
@@ -499,9 +425,9 @@ impl Clone for RawCursor {
 impl RawCursor {
     // TODO: Refactor API with trait and state.
     /// Loads the raw data and unpacks into [`Head`].
-    fn load_unpack(&self, shift: u32) -> Cursor {
-        let raw = self.load(Ordering::Acquire);
-        self.unpack(raw, shift)
+    fn load_unpack(&self) -> Cursor {
+        let raw = self.load(Ordering::SeqCst);
+        self.unpack(raw)
     }
 
     #[inline]
@@ -510,20 +436,20 @@ impl RawCursor {
     }
 
     #[inline]
-    fn unpack(&self, raw: usize, shift: u32) -> Cursor {
-        Cursor::from(raw, shift)
+    fn unpack(&self, raw: usize) -> Cursor {
+        Cursor::from(raw)
     }
 
     #[inline]
     fn advance(&self, count: usize) -> usize {
-        self.0.fetch_add(count, Ordering::AcqRel)
+        self.0.fetch_add(count, Ordering::SeqCst)
     }
 
     fn max(&self, head: usize) -> usize {
         let mut ret = 0;
         while let Err(_) = self
             .0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| {
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
                 ret = old;
                 Some(core::cmp::max(head, old))
             })
@@ -543,7 +469,7 @@ impl Advanceable for RawCursor {
     }
 
     fn set(&self, value: usize) {
-        self.0.store(value, Ordering::Release);
+        self.0.store(value, Ordering::SeqCst);
     }
 }
 
@@ -553,6 +479,7 @@ impl From<usize> for RawCursor {
     }
 }
 
+#[derive(Debug)]
 struct Cursor {
     version: usize,
     offset: usize,
@@ -565,16 +492,25 @@ impl Cursor {
     }
 
     #[inline]
-    fn pack(&self, shift: u32) -> usize {
-        self.version << shift | self.offset
+    fn pack(&self) -> usize {
+        (self.version << OFFSET_BIT_LEN) | (self.offset & ((1 << OFFSET_BIT_LEN) - 1))
     }
 
     #[inline]
-    fn from(value: usize, shift: u32) -> Self {
+    fn from(value: usize) -> Self {
         Self {
-            version: value >> shift,
-            offset: (value & !(usize::MAX << shift)),
+            version: Self::version(value),
+            offset: Self::offset(value),
         }
+    }
+
+    #[inline]
+    fn version(raw: usize) -> usize {
+        raw >> OFFSET_BIT_LEN
+    }
+
+    fn offset(raw: usize) -> usize {
+        raw << VERSION_BIT_LEN >> VERSION_BIT_LEN
     }
 }
 
@@ -641,7 +577,7 @@ enum State {
 mod tests {
     use std::sync::Arc;
 
-    use crate::{max_u32, Head, QueueInner, RawHead};
+    use crate::{max_u32, QueueInner};
 
     const TOTAL_BLOCKS: usize = 100_000;
     const ENTRIES: usize = 10_000;
@@ -652,37 +588,23 @@ mod tests {
     );
 
     #[test]
-    fn test_queue_head() {
-        let raw = RawHead::from(TOTAL_BLOCKS);
-        let head = raw.load_unpack(SHIFT);
-
-        assert_eq!(
-            head,
-            Head {
-                version: 0,
-                index: 100_000,
-            }
-        );
-    }
-
-    #[test]
     fn test_queue_enqueue() {
         const TOTAL_BLOCKS: usize = 10;
         const ENTRIES: usize = 10;
 
         let queue = QueueInner::<usize>::new(0, TOTAL_BLOCKS, ENTRIES);
 
-        (0..21).for_each(|idx| queue.enqueue(idx, SHIFT).unwrap());
+        (0..21).for_each(|idx| queue.enqueue(idx).unwrap());
 
         println!("queue: {queue:#?}");
     }
 
     #[test]
     fn test_queue_enqueue_concurrent() {
-        const TOTAL_BLOCKS: usize = 10;
-        const ENTRIES: usize = 100;
+        const TOTAL_BLOCKS: usize = 100;
+        const ENTRIES: usize = 1000;
         const THREADS: usize = 8;
-        const VALUES_PER_THREAD: usize = 13;
+        const VALUES_PER_THREAD: usize = 130;
 
         let mut handles = vec![];
 
@@ -691,8 +613,6 @@ mod tests {
             TOTAL_BLOCKS,
             ENTRIES,
         ));
-        println!("first block cursor: {:?}", queue.blocks[0].cursor);
-        println!("subsequent block cursor: {:?}", queue.blocks[1].cursor);
 
         (1..=THREADS).for_each(|_| {
             let queue = Arc::clone(&queue);
@@ -700,7 +620,7 @@ mod tests {
             let handle = std::thread::spawn(move || {
                 (1..=VALUES_PER_THREAD).for_each(|i| {
                     let value = String::from(format!("value {i}"));
-                    queue.enqueue(value, SHIFT).unwrap();
+                    queue.enqueue(value).unwrap();
                 });
             });
 
@@ -710,5 +630,7 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
+
+        println!("{queue:?}");
     }
 }
