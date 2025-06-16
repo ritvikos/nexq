@@ -59,10 +59,10 @@ impl<T: Clone + Debug + Default> QueueInner<T> {
             let block = Block::new(default.clone(), entries);
 
             if idx == 0 {
-                block.cursor.allocated.set(0);
-                block.cursor.committed.set(0);
-                block.cursor.reserved.set(0);
-                block.cursor.consumed.set(0);
+                block.allocated.set(0);
+                block.committed.set(0);
+                block.reserved.set(0);
+                block.consumed.set(0);
             }
 
             unsafe { ptr::write(&mut blocks[idx], block) }
@@ -142,10 +142,10 @@ impl<T: Clone + Debug + Default> QueueInner<T> {
         }
 
         let committed = Cursor::new(head.version + 1, 0).pack();
-        nblock.cursor.committed.max(committed);
+        nblock.committed.max(committed);
 
         let allocated = Cursor::new(head.version + 1, 0).pack();
-        nblock.cursor.allocated.max(allocated);
+        nblock.allocated.max(allocated);
 
         head.offset = (head.offset + 1) % self.total_blocks;
 
@@ -163,22 +163,14 @@ impl<T: Clone + Debug + Default> QueueInner<T> {
     // }
 }
 
-// TODO: Cleanup
-// - Maybe rename trait to [`CursorOps`]
-// - Add behavior of struct [`Cursor`] into it
-// - Return its 'trait' instead of 'struct' in functions
-trait Advanceable {
-    fn new(value: usize) -> Self;
-    fn advance_one(&self) -> usize;
-
-    // The [`set`] method is for initialization until a better workaround is used.
-    fn set(&self, value: usize);
-}
-
 #[derive(Clone, Debug)]
 struct Block<T: Clone + Debug + Default> {
-    cursor: Cursors<RawCursor>,
     slots: Box<[Slot<T>]>,
+
+    allocated: RawCursor,
+    committed: RawCursor,
+    reserved: RawCursor,
+    consumed: RawCursor,
 }
 
 impl<T: Clone + Debug + Default> Block<T> {
@@ -190,13 +182,16 @@ impl<T: Clone + Debug + Default> Block<T> {
             .into_boxed_slice();
 
         Self {
-            cursor: Cursors::new(entries),
             slots,
+            allocated: RawCursor::new(entries),
+            committed: RawCursor::new(entries),
+            reserved: RawCursor::new(entries),
+            consumed: RawCursor::new(entries),
         }
     }
 
     fn push(&self, total_entries: usize) -> State {
-        let current = self.cursor.allocated.load_unpack();
+        let current = self.allocated.load_unpack();
 
         if current.offset >= total_entries {
             return State::Full(current.version);
@@ -222,24 +217,24 @@ impl<T: Clone + Debug + Default> Block<T> {
         // - `self.load(cursor_state)` || `self.load_unpack(cursor_state)`
 
         loop {
-            let reserved_raw = self.cursor.reserved.load(Ordering::SeqCst);
-            let reserved = self.cursor.reserved.unpack(reserved_raw);
+            let reserved_raw = self.reserved.load(Ordering::SeqCst);
+            let reserved = self.reserved.unpack(reserved_raw);
 
             if reserved.offset < entries {
-                let committed = self.cursor.committed.load_unpack();
+                let committed = self.committed.load_unpack();
 
                 if reserved.offset == committed.offset {
                     return State::NoSlot;
                 }
 
                 if committed.offset != entries {
-                    let allocated = self.cursor.allocated.load_unpack();
+                    let allocated = self.allocated.load_unpack();
                     if allocated.offset != committed.offset {
                         return State::Unavailable;
                     }
                 }
 
-                if self.cursor.reserved.max(reserved_raw + 1) == reserved_raw {
+                if self.reserved.max(reserved_raw + 1) == reserved_raw {
                     return State::Reserved(reserved);
                 }
 
@@ -277,7 +272,7 @@ impl<T: Clone + Debug + Default> Block<T> {
 
     #[inline]
     fn advance(&self, state: CursorState) -> usize {
-        self.raw_cursor(state).advance_one()
+        self.raw_cursor(state).advance_unit()
     }
 
     #[inline]
@@ -285,14 +280,13 @@ impl<T: Clone + Debug + Default> Block<T> {
         self.raw_cursor(state).load_unpack()
     }
 
-    // TODO: Maybe return [`Advanceable`]?
     #[inline]
     fn raw_cursor(&self, state: CursorState) -> &RawCursor {
         match state {
-            CursorState::Allocated => &self.cursor.allocated,
-            CursorState::Committed => &self.cursor.committed,
-            CursorState::Reserved => &self.cursor.reserved,
-            CursorState::Consumed => &self.cursor.consumed,
+            CursorState::Allocated => &self.allocated,
+            CursorState::Committed => &self.committed,
+            CursorState::Reserved => &self.reserved,
+            CursorState::Consumed => &self.consumed,
         }
     }
 }
@@ -309,10 +303,6 @@ impl<T: Clone + Debug + Default> Clone for Slot<T> {
 }
 
 impl<T: Clone + Debug + Default> Slot<T> {
-    // fn new() -> Self {
-    //     Self(UnsafeCell::new(T))
-    // }
-
     fn new_with(value: T) -> Self {
         Self(UnsafeCell::new(value))
     }
@@ -342,49 +332,6 @@ impl<T: Clone + Debug + Default> Debug for Slot<T> {
 
 unsafe impl<T: Clone + Debug + Default + Send> Send for Slot<T> {}
 unsafe impl<T: Clone + Debug + Default + Send> Sync for Slot<T> {}
-
-const fn max_u32(a: u32, b: u32) -> u32 {
-    if a > b {
-        a
-    } else {
-        b
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Cursors<T: Clone + Advanceable> {
-    allocated: T,
-    committed: T,
-    reserved: T,
-    consumed: T,
-}
-
-impl<T: Clone + Advanceable> Cursors<T> {
-    fn new(value: usize) -> Self {
-        Self {
-            allocated: T::new(value),
-            committed: T::new(value),
-            reserved: T::new(value),
-            consumed: T::new(value),
-        }
-    }
-
-    // #[inline]
-    // fn load(&self, state: CursorState) -> Cursor {
-    //     let t = self.inner(state);
-    //     todo!()
-    // }
-
-    // #[inline]
-    // fn inner(&self, state: CursorState) -> &T {
-    //     match state {
-    //         CursorState::Allocated => &self.allocated,
-    //         CursorState::Committed => &self.committed,
-    //         CursorState::Reserved => &self.reserved,
-    //         CursorState::Consumed => &self.consumed,
-    //     }
-    // }
-}
 
 /// 2-bits for offset and version:
 /// `offset`: Position within block. \
@@ -423,8 +370,24 @@ impl Clone for RawCursor {
 }
 
 impl RawCursor {
+    #[inline]
+    fn new(value: usize) -> Self {
+        Self::from(value)
+    }
+
+    #[inline]
+    fn advance_unit(&self) -> usize {
+        self.advance(1)
+    }
+
+    #[inline]
+    fn set(&self, value: usize) {
+        self.0.store(value, Ordering::SeqCst);
+    }
+
     // TODO: Refactor API with trait and state.
     /// Loads the raw data and unpacks into [`Head`].
+    #[inline]
     fn load_unpack(&self) -> Cursor {
         let raw = self.load(Ordering::SeqCst);
         self.unpack(raw)
@@ -455,21 +418,6 @@ impl RawCursor {
             })
         {}
         ret
-    }
-}
-
-impl Advanceable for RawCursor {
-    #[inline]
-    fn new(value: usize) -> Self {
-        Self::from(value)
-    }
-
-    fn advance_one(&self) -> usize {
-        self.advance(1)
-    }
-
-    fn set(&self, value: usize) {
-        self.0.store(value, Ordering::SeqCst);
     }
 }
 
@@ -509,6 +457,7 @@ impl Cursor {
         raw >> OFFSET_BIT_LEN
     }
 
+    #[inline]
     fn offset(raw: usize) -> usize {
         raw << VERSION_BIT_LEN >> VERSION_BIT_LEN
     }
@@ -577,15 +526,10 @@ enum State {
 mod tests {
     use std::sync::Arc;
 
-    use crate::{max_u32, QueueInner};
+    use crate::QueueInner;
 
     const TOTAL_BLOCKS: usize = 100_000;
     const ENTRIES: usize = 10_000;
-
-    const SHIFT: u32 = max_u32(
-        usize::BITS - ENTRIES.leading_zeros() + 1,
-        usize::BITS - TOTAL_BLOCKS.leading_zeros(),
-    );
 
     #[test]
     fn test_queue_enqueue() {
