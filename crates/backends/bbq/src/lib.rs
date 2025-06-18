@@ -193,6 +193,7 @@ impl<T: Clone + Debug + Default> Block<T> {
     fn push(&self, total_entries: usize) -> State {
         let current = self.allocated.load_unpack();
 
+        // Prevent FAA overflow
         if current.offset >= total_entries {
             return State::Full(current.version);
         }
@@ -208,40 +209,39 @@ impl<T: Clone + Debug + Default> Block<T> {
     }
 
     fn pop(&self, entries: usize) -> State {
-        // TODO: Refactor
-        // Instead of:
-        // - `self.cursor.reserved.load(Ordering::Acquire)`
-        //
-        // do this (introduce abstraction):
-        // - `self.load(cursor_state).operation()` or
-        // - `self.load(cursor_state)` || `self.load_unpack(cursor_state)`
-
         loop {
             let reserved_raw = self.reserved.load(Ordering::SeqCst);
             let reserved = self.reserved.unpack(reserved_raw);
 
-            if reserved.offset < entries {
-                let committed = self.committed.load_unpack();
-
-                if reserved.offset == committed.offset {
-                    return State::NoSlot;
-                }
-
-                if committed.offset != entries {
-                    let allocated = self.allocated.load_unpack();
-                    if allocated.offset != committed.offset {
-                        return State::Unavailable;
-                    }
-                }
-
-                if self.reserved.max(reserved_raw + 1) == reserved_raw {
-                    return State::Reserved(reserved);
-                }
-
-                continue;
+            // All the slots are reserved
+            if reserved.offset >= entries {
+                return State::Full(reserved.version);
             }
 
-            return State::Full(reserved.version);
+            let committed = self.committed.load_unpack();
+
+            // No space to reserve
+            // The consumer never pass the producer
+            if reserved.offset == committed.offset {
+                return State::NoSlot;
+            }
+
+            // Prevent out of order commits
+            if committed.offset != entries {
+                let allocated = self.allocated.load_unpack();
+
+                // If 'allocated.offset' > 'commmitted.offset',
+                // then we don't allow that commit until all
+                // allocated entries are committed
+                if allocated.offset != committed.offset {
+                    return State::Unavailable;
+                }
+            }
+
+            // Try reserve next slot
+            if self.reserved.max(reserved_raw + 1) == reserved_raw {
+                return State::Reserved(reserved);
+            }
         }
     }
 
