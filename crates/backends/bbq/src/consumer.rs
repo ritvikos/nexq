@@ -22,25 +22,23 @@ enum PopState<'a, T> {
 
 pub(crate) struct Consumer<'a, T> {
     block: &'a Block<T>,
-    slots_per_block: usize,
     allocated: CursorRef<'a>,
     committed: CursorRef<'a>,
     reserved: CursorMut<'a>,
 }
 
 impl<'a, T> Consumer<'a, T> {
-    pub(crate) fn new(block: &'a Block<T>, slots_per_block: usize) -> Self {
+    pub(crate) fn new(block: &'a Block<T>) -> Self {
         Self {
             block,
-            slots_per_block,
             allocated: CursorRef::from(block.cursor::<Allocated>()),
             committed: CursorRef::from(block.cursor::<Committed>()),
             reserved: CursorMut::from(block.cursor::<Reserved>()),
         }
     }
 
-    pub(crate) fn pop(&self) -> PopOutcome<T> {
-        match self.reserve() {
+    pub(crate) fn pop<const SLOTS: usize>(&self) -> PopOutcome<T> {
+        match self.reserve::<SLOTS>() {
             PopState::Reserved(reader) => PopOutcome::Read(reader.consume()),
             PopState::Done(version) => PopOutcome::Done(version),
             PopState::NoSlot => PopOutcome::NoSlot,
@@ -48,13 +46,11 @@ impl<'a, T> Consumer<'a, T> {
         }
     }
 
-    fn reserve(&self) -> PopState<'a, T> {
+    fn reserve<const SLOTS: usize>(&self) -> PopState<'a, T> {
         loop {
             let reserved = self.reserved.load();
-            println!("reserved offset: {}", reserved.offset());
-            println!("slots_per_block: {}", self.slots_per_block);
 
-            if reserved.offset() >= self.slots_per_block {
+            if reserved.offset() >= SLOTS {
                 return PopState::Done(reserved.version());
             }
 
@@ -67,7 +63,7 @@ impl<'a, T> Consumer<'a, T> {
             }
 
             // Prevent out of order commits
-            if committed.offset() != self.slots_per_block {
+            if committed.offset() != SLOTS {
                 let allocated = self.allocated.load();
 
                 // Wait until allocated entries are committed

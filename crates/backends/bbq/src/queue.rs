@@ -38,7 +38,7 @@ impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
         );
 
         let blocks: Box<[Block<T>; TOTAL_BLOCKS]> = Box::new(core::array::from_fn(|idx| {
-            let block = Block::new(SLOTS_PER_BLOCK);
+            let block = Block::new::<SLOTS_PER_BLOCK>();
 
             if idx == 0 {
                 block.cursor::<Allocated>().store(0);
@@ -78,9 +78,9 @@ impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
         loop {
             let head = self.producer.load();
             let block = unsafe { self.blocks.get_unchecked(head.offset()) };
-            let producer = block.as_producer(SLOTS_PER_BLOCK);
+            let producer = block.as_producer();
 
-            match producer.push(value) {
+            match producer.push::<SLOTS_PER_BLOCK>(value) {
                 PushOutcome::Written => return Ok(()),
                 PushOutcome::Full {
                     rejected,
@@ -103,9 +103,9 @@ impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
         loop {
             let head = self.consumer.load();
             let block = unsafe { self.blocks.get_unchecked(head.offset()) };
-            let consumer = block.as_consumer(SLOTS_PER_BLOCK);
+            let consumer = block.as_consumer();
 
-            match consumer.pop() {
+            match consumer.pop::<SLOTS_PER_BLOCK>() {
                 PopOutcome::Read(value) => return Ok(value),
                 PopOutcome::NoSlot | PopOutcome::Unavailable => {
                     return Err(QueueError::Dequeue(DequeueError::Empty));

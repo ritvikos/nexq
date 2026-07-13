@@ -11,27 +11,27 @@ pub(crate) struct Block<T> {
 }
 
 impl<T> Block<T> {
-    pub(crate) fn new(slots_per_block: usize) -> Self {
-        let mut slots = Vec::with_capacity(slots_per_block);
-        for _ in 0..slots_per_block {
+    pub(crate) fn new<const SLOTS: usize>() -> Self {
+        let mut slots = Vec::with_capacity(SLOTS);
+        for _ in 0..SLOTS {
             slots.push(Slot::new());
         }
 
         Self {
             slots: slots.into_boxed_slice(),
-            allocated: RawCursor::new(0, slots_per_block),
-            committed: RawCursor::new(0, slots_per_block),
-            reserved: RawCursor::new(0, slots_per_block),
-            consumed: RawCursor::new(0, slots_per_block),
+            allocated: RawCursor::new(0, SLOTS),
+            committed: RawCursor::new(0, SLOTS),
+            reserved: RawCursor::new(0, SLOTS),
+            consumed: RawCursor::new(0, SLOTS),
         }
     }
 
-    pub(crate) fn as_producer(&self, slots_per_block: usize) -> Producer<'_, T> {
-        Producer::new(self, slots_per_block)
+    pub(crate) fn as_producer(&self) -> Producer<'_, T> {
+        Producer::new(self)
     }
 
-    pub(crate) fn as_consumer(&self, slots_per_block: usize) -> Consumer<'_, T> {
-        Consumer::new(self, slots_per_block)
+    pub(crate) fn as_consumer(&self) -> Consumer<'_, T> {
+        Consumer::new(self)
     }
 
     #[inline]

@@ -16,21 +16,19 @@ enum PushState<'a, T> {
 
 pub(crate) struct Producer<'a, T> {
     block: &'a Block<T>,
-    slots_per_block: usize,
     allocated: CursorMut<'a>,
 }
 
 impl<'a, T> Producer<'a, T> {
-    pub(crate) fn new(block: &'a Block<T>, slots_per_block: usize) -> Self {
+    pub(crate) fn new(block: &'a Block<T>) -> Self {
         Self {
             block,
-            slots_per_block,
             allocated: CursorMut::from(block.cursor::<Allocated>()),
         }
     }
 
-    pub(crate) fn push(&self, value: T) -> PushOutcome<T> {
-        match self.alloc() {
+    pub(crate) fn push<const SLOTS: usize>(&self, value: T) -> PushOutcome<T> {
+        match self.alloc::<SLOTS>() {
             PushState::Allocated(writer) => {
                 let committed = writer.commit(value);
                 core::mem::forget(committed);
@@ -43,18 +41,18 @@ impl<'a, T> Producer<'a, T> {
         }
     }
 
-    fn alloc(&self) -> PushState<'a, T> {
+    fn alloc<const SLOTS: usize>(&self) -> PushState<'a, T> {
         let current = self.allocated.load();
 
         // Prevent FAA overflow
-        if current.offset() >= self.slots_per_block {
+        if current.offset() >= SLOTS {
             return PushState::Full(current.version());
         }
 
         let raw = self.allocated.advance_unit();
         let current = PackedCursor::from(raw);
 
-        if current.offset() >= self.slots_per_block {
+        if current.offset() >= SLOTS {
             return PushState::Full(current.version());
         }
 
