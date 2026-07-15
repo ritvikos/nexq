@@ -82,17 +82,17 @@ impl RawCursor {
 
     #[inline]
     pub(crate) fn advance_unit(&self) -> usize {
-        self.0.fetch_add(1, Ordering::SeqCst)
+        self.0.fetch_add(1, Ordering::Release)
     }
 
     #[inline]
     pub(crate) fn store(&self, value: usize) {
-        self.0.store(value, Ordering::SeqCst);
+        self.0.store(value, Ordering::Release);
     }
 
     #[inline]
     pub(crate) fn load(&self) -> PackedCursor {
-        PackedCursor(self.0.load(Ordering::SeqCst))
+        PackedCursor(self.0.load(Ordering::Acquire))
     }
 
     // Atomically set to `max(current, val)`. Returns the previous value.
@@ -105,7 +105,7 @@ impl RawCursor {
             match self.0.compare_exchange_weak(
                 current.raw(),
                 value.raw(),
-                Ordering::SeqCst,
+                Ordering::AcqRel,
                 Ordering::Relaxed,
             ) {
                 Ok(prev) => return PackedCursor(prev),
