@@ -4,6 +4,7 @@
 //!
 //! [bbq-paper]: https://www.usenix.org/conference/atc22/presentation/wang-jiawei
 
+mod backoff;
 mod block;
 mod consumer;
 mod cursor;
@@ -14,4 +15,5 @@ mod slot;
 #[cfg(test)]
 mod tests;
 
+pub use backoff::{Backoff, ExponentialBackoff};
 pub use queue::Queue;

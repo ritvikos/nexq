@@ -3,6 +3,7 @@
 //! a producer never advances into a block that consumer hasn't fully drained.
 
 use crate::{
+    backoff::{Backoff, ExponentialBackoff},
     block::{Allocated, Block, Committed, Consumed, Reserved},
     consumer::PopOutcome,
     cursor::{PackedCursor, RawCursor},
@@ -20,15 +21,20 @@ enum AdvanceResult {
 // state transition:
 // producer: allocated -> committed
 // consumer: reserved -> consumed
-pub struct Queue<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize> {
+pub struct Queue<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize, B = ExponentialBackoff>
+where
+    B: Backoff + Default,
+{
     producer: RawCursor,
     consumer: RawCursor,
-    blocks: Box<[Block<T>]>,
-    _marker: PhantomData<T>,
+    blocks: Box<[Block<T>; TOTAL_BLOCKS]>,
+    _marker: PhantomData<(T, fn(B))>,
 }
 
-impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
-    Queue<T, TOTAL_BLOCKS, SLOTS_PER_BLOCK>
+impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize, B>
+    Queue<T, TOTAL_BLOCKS, SLOTS_PER_BLOCK, B>
+where
+    B: Backoff + Default,
 {
     pub fn new() -> Self {
         let _: () = assert!(TOTAL_BLOCKS > 0, "`TOTAL_BLOCKS` must be greater than 0");
@@ -59,8 +65,10 @@ impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
     }
 }
 
-impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize> Debug
-    for Queue<T, TOTAL_BLOCKS, SLOTS_PER_BLOCK>
+impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize, B> Debug
+    for Queue<T, TOTAL_BLOCKS, SLOTS_PER_BLOCK, B>
+where
+    B: Backoff + Default,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Queue")
@@ -70,11 +78,14 @@ impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize> Debug
     }
 }
 
-impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
-    Queue<T, TOTAL_BLOCKS, SLOTS_PER_BLOCK>
+impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize, B>
+    Queue<T, TOTAL_BLOCKS, SLOTS_PER_BLOCK, B>
+where
+    B: Backoff + Default,
 {
     pub fn enqueue(&self, value: T) -> Result<(), QueueError> {
         let mut value = value;
+        let mut backoff = B::default();
         loop {
             let head = self.producer.load();
             let block = unsafe { self.blocks.get_unchecked(head.offset()) };
@@ -87,10 +98,15 @@ impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
                     version: _,
                 } => match self.advance_producer(head) {
                     AdvanceResult::Unavailable => {
-                        return Err(QueueError::Enqueue(EnqueueError::Unavailable))
+                        if !backoff.snooze() {
+                            return Err(QueueError::Enqueue(EnqueueError::Unavailable));
+                        }
+                        value = rejected;
+                        continue;
                     }
                     AdvanceResult::NoSlot => return Err(QueueError::Enqueue(EnqueueError::NoSlot)),
                     AdvanceResult::Success => {
+                        backoff.reset();
                         value = rejected;
                         continue;
                     }
@@ -100,6 +116,7 @@ impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
     }
 
     pub fn dequeue(&self) -> Result<T, QueueError> {
+        let mut backoff = B::default();
         loop {
             let head = self.consumer.load();
             let block = unsafe { self.blocks.get_unchecked(head.offset()) };
@@ -107,11 +124,16 @@ impl<T, const TOTAL_BLOCKS: usize, const SLOTS_PER_BLOCK: usize>
 
             match consumer.pop::<SLOTS_PER_BLOCK>() {
                 PopOutcome::Read(value) => return Ok(value),
-                PopOutcome::NoSlot | PopOutcome::Unavailable => {
-                    return Err(QueueError::Dequeue(DequeueError::Empty));
+                PopOutcome::NoSlot => return Err(QueueError::Dequeue(DequeueError::Empty)),
+                PopOutcome::Unavailable => {
+                    if !backoff.spin() {
+                        return Err(QueueError::Dequeue(DequeueError::Empty));
+                    }
+                    continue;
                 }
                 PopOutcome::Done(version) => {
                     if self.advance_consumer(head, version) {
+                        backoff.reset();
                         continue;
                     }
                     return Err(QueueError::Dequeue(DequeueError::Empty));
